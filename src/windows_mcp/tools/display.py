@@ -5,7 +5,7 @@ from typing import Any
 
 from fastmcp import Context
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 
 
 def _rect_to_dict(rect: Any) -> dict[str, int] | None:
@@ -43,6 +43,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "DisplayInventory-Tool")
+    @requires_permission("DisplayInventory")
     def display_inventory_tool(ctx: Context = None) -> list[dict[str, object]]:
         displays = get_desktop().get_displays()
         return [

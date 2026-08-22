@@ -1,7 +1,7 @@
 """PowerShell tool — shell/command execution."""
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from windows_mcp.powershell import PowerShellExecutor
 from fastmcp import Context
 
@@ -19,6 +19,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Powershell-Tool")
+    @requires_permission("PowerShell")
     def powershell_tool(command: str, timeout: int = 30, ctx: Context = None) -> str:
         try:
             response, status_code = PowerShellExecutor.execute_command(command, timeout)

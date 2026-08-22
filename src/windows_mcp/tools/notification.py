@@ -4,7 +4,7 @@ from typing import Annotated
 
 from mcp.types import ToolAnnotations
 from pydantic import Field
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 from windows_mcp import notifications
 
@@ -22,6 +22,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Notification-Tool")
+    @requires_permission("Notification")
     def notification_tool(
         title: Annotated[
             str,

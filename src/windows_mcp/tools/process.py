@@ -3,7 +3,7 @@
 from typing import Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 from windows_mcp import process
 
@@ -21,6 +21,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Process-Tool")
+    @requires_permission("Process")
     def process_tool(
         mode: Literal["list", "kill"],
         name: str | None = None,

@@ -3,7 +3,7 @@
 from typing import Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from windows_mcp import registry
 from windows_mcp.registry import RegistryType
 from fastmcp import Context
@@ -22,6 +22,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Registry-Tool")
+    @requires_permission("Registry")
     def registry_tool(
         mode: Literal['get', 'set', 'delete', 'list'],
         path: str,
