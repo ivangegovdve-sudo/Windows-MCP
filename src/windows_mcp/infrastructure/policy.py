@@ -178,7 +178,11 @@ class PolicyEngine:
             mode = kwargs.get("mode", "read")
             if mode in ["write", "move", "delete"]:
                 return True
-            if mode == "copy" and kwargs.get("overwrite", False):
+            overwrite = kwargs.get("overwrite", False)
+            overwrite_enabled = overwrite is True or (
+                isinstance(overwrite, str) and overwrite.lower() == "true"
+            )
+            if mode == "copy" and overwrite_enabled:
                 return True
 
         if tool_name == "App":
@@ -196,7 +200,11 @@ class PolicyEngine:
                 return True
 
         if tool_name == "Move":
-            if kwargs.get("drag", False):
+            drag = kwargs.get("drag", False)
+            drag_enabled = drag is True or (
+                isinstance(drag, str) and drag.strip().casefold() == "true"
+            )
+            if drag_enabled:
                 return True
 
         return False
