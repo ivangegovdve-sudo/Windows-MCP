@@ -80,3 +80,49 @@ def sample_desktop_state(sample_window):
         active_window=sample_window,
         windows=[sample_window],
     )
+
+import json
+from pathlib import Path
+
+@pytest.fixture(autouse=True)
+def mock_policy_for_tests(request, tmp_path, monkeypatch):
+    """
+    Automatically mock the policy file for all tests to allow everything,
+    except for test_policy.py which tests the actual policy logic.
+    """
+    if "test_policy" in request.module.__name__:
+        return
+
+    # Create a temporary policy file that allows all consequential tools and modes
+    policy_file = tmp_path / "test_permissions.json"
+    audit_file = tmp_path / "test_audit.log"
+
+    # We allow all known tools in the test suite
+    policy_data = {
+        "allowed_tools": [
+            "App", "MultiSelect", "MultiEdit", "Move", "Shell", "PowerShell",
+            "Click", "Type", "Shortcut", "FileSystem", "Process", "Registry", "Clipboard"
+        ],
+        "allowed_modes": {
+            "App": ["launch", "launch_executable", "resize", "switch"],
+            "FileSystem": ["read", "write", "move", "copy", "delete", "list", "info", "search"],
+            "Registry": ["get", "set", "delete", "list"],
+            "Process": ["list", "kill"],
+            "Clipboard": ["get", "set"]
+        },
+        "allow_drag": True
+    }
+    policy_file.write_text(json.dumps(policy_data))
+
+    from windows_mcp.infrastructure.policy import PolicyEngine
+
+    # Inject a test engine
+    test_engine = PolicyEngine(policy_file, audit_file)
+
+    # Override the global _engine in policy.py
+    monkeypatch.setattr("windows_mcp.infrastructure.policy._engine", test_engine)
+
+    def get_test_engine():
+        return test_engine
+
+    monkeypatch.setattr("windows_mcp.infrastructure.policy.get_policy_engine", get_test_engine)
