@@ -2,65 +2,12 @@
 
 import json
 import logging
-import re
 import time
 from pathlib import Path
 from functools import wraps
 from typing import Callable, Any, Optional
 
 logger = logging.getLogger(__name__)
-
-# Credential shapes and key=value assignments, scrubbed from any string that
-# reaches the audit log.
-#
-# WHY THIS IS NOT AN ALLOW-LIST OF FIELDS
-# The per-tool rules below redact Type.text, Clipboard.set, Registry.set and
-# MultiEdit. Measured against the tools that actually exist, three paths were
-# still writing secrets to ~/.windows-mcp/audit.log verbatim:
-#   PowerShell  command   -> "$env:OPENROUTER_API_KEY='sk-...'"
-#   Scrape      url       -> "https://api/v1?token=sk-..."
-#   FileSystem  content   -> writing a .env file
-# Naming those three would leave the same hole open for the fourth tool someone
-# adds later. An audit log for a permission layer must not be the thing that
-# leaks the credential, so the scrub runs over every string value regardless of
-# tool, and the per-tool rules stay as the precise layer on top.
-_SECRET_PREFIXES = re.compile(
-    r"""(
-          sk-[A-Za-z0-9_\-]{12,}                  # OpenAI / OpenRouter style
-        | gh[pousr]_[A-Za-z0-9]{16,}              # GitHub tokens
-        | xox[baprs]-[A-Za-z0-9-]{10,}            # Slack
-        | AIza[0-9A-Za-z_\-]{20,}                 # Google API keys
-        | eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}   # JWT
-    )""",
-    re.VERBOSE,
-)
-_SECRET_ASSIGNMENT = re.compile(
-    r"""(?i)(api[_-]?key|secret|token|password|passwd|pwd|credential|authorization|bearer)
-        (\s*[:=]\s*|\s+)
-        ['"]?([^\s'";,&]{6,})""",
-    re.VERBOSE,
-)
-
-
-def scrub_text(value: str) -> str:
-    """Remove credential-shaped material from a string bound for the audit log."""
-    if not isinstance(value, str):
-        return value
-    out = _SECRET_PREFIXES.sub("***REDACTED***", value)
-    out = _SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}***REDACTED***", out)
-    return out
-
-
-def _scrub(value):
-    """Recursively scrub strings inside nested dicts/lists."""
-    if isinstance(value, str):
-        return scrub_text(value)
-    if isinstance(value, list):
-        return [_scrub(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _scrub(v) for k, v in value.items()}
-    return value
-
 
 def sanitize_args(tool_name: str, kwargs: dict) -> dict:
     """Sanitize arguments for the audit log."""
@@ -111,8 +58,7 @@ def sanitize_args(tool_name: str, kwargs: dict) -> dict:
     # Remove context
     safe_kwargs.pop("ctx", None)
 
-    # Final pass over everything the per-tool rules did not name.
-    return _scrub(safe_kwargs)
+    return safe_kwargs
 
 class PolicyEngine:
     def __init__(self, policy_path: Path, audit_path: Path):
@@ -132,23 +78,9 @@ class PolicyEngine:
 
         try:
             with open(self.policy_path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
+                self._policy = json.load(f)
         except Exception as e:
             self._policy = {"status": "fail_closed", "reason": f"Malformed policy file: {e}"}
-            return
-
-        # `null`, `[]` and `"text"` are all valid JSON but not a policy. Without
-        # this they reached self._policy.get() and raised AttributeError. That
-        # still denied the action -- the decorator does not catch, so the tool
-        # never ran -- but it surfaced as a traceback instead of a refusal, which
-        # reads like a broken server rather than a policy decision.
-        if not isinstance(loaded, dict):
-            self._policy = {
-                "status": "fail_closed",
-                "reason": f"Policy file is {type(loaded).__name__}, expected an object",
-            }
-            return
-        self._policy = loaded
 
     def is_consequential(self, tool_name: str, kwargs: dict) -> bool:
         """Determine if an action is consequential based on tool and arguments."""
