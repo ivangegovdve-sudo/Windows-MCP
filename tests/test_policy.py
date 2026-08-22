@@ -2,7 +2,7 @@ import json
 import os
 import pytest
 from pathlib import Path
-from windows_mcp.infrastructure.policy import PolicyEngine
+from windows_mcp.infrastructure.policy import PolicyEngine, sanitize_args
 
 def test_policy_allowed_action(tmp_path):
     policy_file = tmp_path / "permissions.json"
@@ -217,3 +217,49 @@ def test_policy_multiedit_string_redaction(tmp_path):
     assert "secret3" not in log_content
     assert "secret4" not in log_content
     assert "***REDACTED***" in log_content
+
+
+# --- audit log must not become the leak -------------------------------------
+# Measured against the shipped sanitiser: Type/Clipboard/Registry/MultiEdit were
+# redacted, but PowerShell.command, Scrape.url and FileSystem.content wrote the
+# value into ~/.windows-mcp/audit.log verbatim. A permission layer whose own log
+# spills the credential is worse than none, because it looks accountable.
+FAKE_SECRET = "sk-or-v1-" + "b" * 56  # shape only; not a real credential
+
+
+@pytest.mark.parametrize(
+    "tool,kwargs",
+    [
+        ("Type", {"text": FAKE_SECRET}),
+        ("PowerShell", {"command": f"$env:OPENROUTER_API_KEY='{FAKE_SECRET}'"}),
+        ("PowerShell", {"command": f'curl -H "Authorization: Bearer {FAKE_SECRET}" https://x'}),
+        ("Scrape", {"url": f"https://api.example.com/v1?token={FAKE_SECRET}"}),
+        ("FileSystem", {"mode": "write", "path": "x.env", "content": FAKE_SECRET}),
+        ("Clipboard", {"mode": "set", "text": FAKE_SECRET}),
+        ("Registry", {"mode": "set", "value": FAKE_SECRET}),
+    ],
+)
+def test_audit_never_records_a_credential(tool, kwargs):
+    assert FAKE_SECRET not in repr(sanitize_args(tool, kwargs))
+
+
+def test_audit_stays_useful_and_does_not_over_redact():
+    """A log that redacts everything is as useless as one that redacts nothing."""
+    out = sanitize_args("PowerShell", {"command": "Get-Process | Where-Object CPU -gt 10"})
+    assert out["command"] == "Get-Process | Where-Object CPU -gt 10"
+    out = sanitize_args("FileSystem", {"mode": "read", "path": r"C:/Users/x/notes.txt"})
+    assert out["path"] == r"C:/Users/x/notes.txt"
+
+
+@pytest.mark.parametrize("body", ["null", "[]", '"a string"'])
+def test_policy_that_is_valid_json_but_not_an_object_fails_closed(tmp_path, body):
+    """These parse fine, so the malformed-JSON branch never sees them.
+
+    Before the fix they reached self._policy.get() and raised AttributeError.
+    That still denied the action -- the decorator does not catch, so the tool
+    never ran -- but it surfaced as a traceback rather than a refusal.
+    """
+    policy = tmp_path / "permissions.json"
+    policy.write_text(body, encoding="utf-8")
+    engine = PolicyEngine(policy, tmp_path / "audit.log")
+    assert engine.evaluate("PowerShell", {"command": "whoami"}) is False
