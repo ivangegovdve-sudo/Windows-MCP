@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -81,19 +82,9 @@ def sample_desktop_state(sample_window):
         windows=[sample_window],
     )
 
-import json
-from pathlib import Path
-
-@pytest.fixture(autouse=True)
-def mock_policy_for_tests(request, tmp_path, monkeypatch):
-    """
-    Automatically mock the policy file for all tests to allow everything,
-    except for test_policy.py which tests the actual policy logic.
-    """
-    if "test_policy" in request.module.__name__:
-        return
-
-    # Create a temporary policy file that allows all consequential tools and modes
+@pytest.fixture
+def allow_all_policy(tmp_path, monkeypatch):
+    """Explicitly allow consequential actions in legacy functional tool tests."""
     policy_file = tmp_path / "test_permissions.json"
     audit_file = tmp_path / "test_audit.log"
 
@@ -119,10 +110,5 @@ def mock_policy_for_tests(request, tmp_path, monkeypatch):
     # Inject a test engine
     test_engine = PolicyEngine(policy_file, audit_file)
 
-    # Override the global _engine in policy.py
     monkeypatch.setattr("windows_mcp.infrastructure.policy._engine", test_engine)
-
-    def get_test_engine():
-        return test_engine
-
-    monkeypatch.setattr("windows_mcp.infrastructure.policy.get_policy_engine", get_test_engine)
+    return test_engine

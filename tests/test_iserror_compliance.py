@@ -23,10 +23,13 @@ try:
 except ImportError:  # fastmcp not on the test platform
     ToolError = None  # type: ignore[misc,assignment]
 
-pytestmark = pytest.mark.skipif(
-    FastMCP is None or ToolError is None,
-    reason="fastmcp not installed; test is non-Windows or fastmcp missing",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        FastMCP is None or ToolError is None,
+        reason="fastmcp not installed; test is non-Windows or fastmcp missing",
+    ),
+    pytest.mark.usefixtures("allow_all_policy"),
+]
 
 
 @pytest.fixture(scope="module")

@@ -1,12 +1,13 @@
 """Policy engine for Windows-MCP permission layer."""
 
 import json
+import inspect
 import logging
 import re
 import time
-from pathlib import Path
 from functools import wraps
-from typing import Callable, Any, Optional
+from pathlib import Path
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +19,24 @@ SECRET_PATTERNS = [
     r"(eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)",
 ]
 
-ASSIGNMENT_PATTERNS = [
-    r"(?i)\b(?:api_key|secret|token|password|bearer|authorization)\s*[:=]\s*[\"']?([^\"'\s]+)[\"']?",
-]
+CREDENTIAL_NAME = (
+    r"(?:[a-z0-9]+[_-])*(?:api[_-]?key|client[_-]?secret|access[_-]?token|"
+    r"refresh[_-]?token)|secret|token|password|passwd|pwd|authorization|auth|bearer"
+)
+ASSIGNMENT_PATTERN = re.compile(
+    rf"(?i)(?P<prefix>[\"']?\b(?:{CREDENTIAL_NAME})\b[\"']?\s*[:=]\s*)"
+    r"(?P<value>(?:(?:bearer|basic)\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))"
+)
+
 
 def scrub_string(text: str) -> str:
     for pattern in SECRET_PATTERNS:
         text = re.sub(pattern, "***REDACTED***", text)
-    for pattern in ASSIGNMENT_PATTERNS:
-        text = re.sub(pattern, lambda m: m.group(0).replace(m.group(1), "***REDACTED***"), text)
-    return text
+    return ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group('prefix')}***REDACTED***",
+        text,
+    )
+
 
 def scrub_recursive(data: Any) -> Any:
     if isinstance(data, str):
@@ -37,6 +46,7 @@ def scrub_recursive(data: Any) -> Any:
     elif isinstance(data, list):
         return [scrub_recursive(v) for v in data]
     return data
+
 
 def sanitize_args(tool_name: str, kwargs: dict) -> dict:
     """Sanitize arguments for the audit log."""
@@ -90,6 +100,7 @@ def sanitize_args(tool_name: str, kwargs: dict) -> dict:
     # Final scrub over every string bound for the log
     return scrub_recursive(safe_kwargs)
 
+
 class PolicyEngine:
     def __init__(self, policy_path: Path, audit_path: Path):
         self.policy_path = policy_path
@@ -108,9 +119,46 @@ class PolicyEngine:
 
         try:
             with open(self.policy_path, "r", encoding="utf-8") as f:
-                self._policy = json.load(f)
-        except Exception as e:
-            self._policy = {"status": "fail_closed", "reason": f"Malformed policy file: {e}"}
+                loaded = json.load(f)
+        except Exception:
+            self._policy = {
+                "status": "fail_closed",
+                "reason": "Malformed or unreadable policy file",
+            }
+            return
+
+        if not self._is_valid_policy(loaded):
+            self._policy = {
+                "status": "fail_closed",
+                "reason": "Structurally invalid policy file",
+            }
+            return
+
+        self._policy = loaded
+
+    @staticmethod
+    def _is_valid_policy(loaded: Any) -> bool:
+        if not isinstance(loaded, dict):
+            return False
+
+        allowed_tools = loaded.get("allowed_tools", [])
+        if not isinstance(allowed_tools, list) or not all(
+            isinstance(tool, str) for tool in allowed_tools
+        ):
+            return False
+
+        allowed_modes = loaded.get("allowed_modes", {})
+        if not isinstance(allowed_modes, dict):
+            return False
+        if not all(
+            isinstance(tool, str)
+            and isinstance(modes, list)
+            and all(isinstance(mode, str) for mode in modes)
+            for tool, modes in allowed_modes.items()
+        ):
+            return False
+
+        return "allow_drag" not in loaded or isinstance(loaded["allow_drag"], bool)
 
     def is_consequential(self, tool_name: str, kwargs: dict) -> bool:
         """Determine if an action is consequential based on tool and arguments."""
@@ -163,11 +211,12 @@ class PolicyEngine:
         if tool_name not in allowed_tools:
             return False
 
-        # Tool-specific granular permissions (modes)
+        # Consequential mode-based actions require an explicit exact-mode allow.
         allowed_modes = self._policy.get("allowed_modes", {})
-        if tool_name in allowed_modes:
-            mode = kwargs.get("mode")
-            if mode is not None and mode not in allowed_modes[tool_name]:
+        mode = kwargs.get("mode")
+        if mode is not None:
+            tool_modes = allowed_modes.get(tool_name)
+            if tool_modes is None or mode not in tool_modes:
                 return False
 
         # Drag specific permission
@@ -177,23 +226,26 @@ class PolicyEngine:
 
         return True
 
-    def log_audit(self, tool_name: str, kwargs: dict, decision: str):
+    def log_audit(self, tool_name: str, kwargs: dict, decision: str) -> bool:
         sanitized = sanitize_args(tool_name, kwargs)
         entry = {
             "timestamp": time.time(),
             "tool": tool_name,
             "args": sanitized,
-            "decision": decision
+            "decision": decision,
         }
         try:
             with open(self.audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
+            return True
         except Exception as e:
             logger.error(f"Failed to write audit log: {e}")
+            return False
 
 
 # Global instance
 _engine = None
+
 
 def get_policy_engine() -> PolicyEngine:
     global _engine
@@ -206,16 +258,14 @@ def get_policy_engine() -> PolicyEngine:
 
 def requires_permission(tool_name: str):
     """Decorator to enforce policy checks on tool execution."""
+
     def decorator(func: Callable):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
+        def enforce(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
             # In FastMCP, tool arguments are usually passed as kwargs.
             # However, if passed as args, we need a way to inspect them.
             # To keep things simple and robust for Stage 1, we assume
             # arguments are either kwargs or we inspect the function signature.
             # FastMCP generally passes user inputs as kwargs.
-
-            import inspect
             sig = inspect.signature(func)
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
@@ -227,14 +277,26 @@ def requires_permission(tool_name: str):
                 allowed = engine.evaluate(tool_name, all_kwargs)
                 if not allowed:
                     engine.log_audit(tool_name, all_kwargs, "DENIED")
-                    raise PermissionError(
-                        f"Action '{tool_name}' is denied by the server policy."
-                    )
-                else:
-                    engine.log_audit(tool_name, all_kwargs, "ALLOWED")
+                    raise PermissionError(f"Action '{tool_name}' is denied by the server policy.")
+                if not engine.log_audit(tool_name, all_kwargs, "ALLOWED"):
+                    raise PermissionError(f"Action '{tool_name}' is denied by the server policy.")
             else:
                 engine.log_audit(tool_name, all_kwargs, "ALLOWED (Reversible)")
 
+        if inspect.iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                enforce(args, kwargs)
+                return await func(*args, **kwargs)
+
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            enforce(args, kwargs)
             return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
