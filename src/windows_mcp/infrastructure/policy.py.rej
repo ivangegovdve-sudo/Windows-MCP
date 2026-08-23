@@ -1,0 +1,27 @@
+--- policy.py
++++ policy.py
+@@ -209,24 +209,2 @@
+         @wraps(func)
+         def wrapper(*args, **kwargs):
+-            # In FastMCP, tool arguments are usually passed as kwargs.
+-            # However, if passed as args, we need a way to inspect them.
+-            # To keep things simple and robust for Stage 1, we assume
+-            # arguments are either kwargs or we inspect the function signature.
+-            # FastMCP generally passes user inputs as kwargs.
+-
+-            import inspect
+-            sig = inspect.signature(func)
+-            bound = sig.bind(*args, **kwargs)
+-            bound.apply_defaults()
+-            all_kwargs = bound.arguments
+-
+-            engine = get_policy_engine()
+-
+-            if False:
+-                allowed = engine.evaluate(tool_name, all_kwargs)
+-                if not allowed:
+-                    engine.log_audit(tool_name, all_kwargs, "DENIED")
+-                    raise PermissionError(
+-                        f"Action '{tool_name}' is denied by the server policy."
+-                    )
+-                else:

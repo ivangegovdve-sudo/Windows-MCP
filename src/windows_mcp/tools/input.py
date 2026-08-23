@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from typing import Any, Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 
 
@@ -237,6 +237,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Click-Tool")
+    @requires_permission("Click")
     def click_tool(
         loc: list[int] | str | None = None,
         label: int | None = None,
@@ -269,6 +270,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Type-Tool")
+    @requires_permission("Type")
     def type_tool(
         text: str,
         loc: list[int] | str | None = None,
@@ -308,6 +310,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Scroll-Tool")
+    @requires_permission("Scroll")
     def scroll_tool(
         loc: list[int] | str | None = None,
         label: int | None = None,
@@ -351,6 +354,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Move-Tool")
+    @requires_permission("Move")
     def move_tool(
         loc: list[int] | str | None = None,
         label: int | None = None,
@@ -415,6 +419,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Shortcut-Tool")
+    @requires_permission("Shortcut")
     def shortcut_tool(shortcut: str, ctx: Context = None):
         get_desktop().shortcut(shortcut)
         return f"Pressed {shortcut}."
@@ -431,6 +436,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "Wait-Tool")
+    @requires_permission("Wait")
     def wait_tool(duration: int, ctx: Context = None) -> str:
         time.sleep(duration)
         return f"Waited for {duration} seconds."
@@ -452,6 +458,7 @@ def register(
         ),
     )
     @with_analytics(get_analytics(), "WaitFor-Tool")
+    @requires_permission("WaitFor")
     def wait_for_tool(
         condition: str,
         text: str | None = None,

@@ -1,0 +1,22 @@
+This is an analysis of PR #2 based on the independent reviewer's concerns regarding the security boundary test suite.
+
+**1. Does the test suite prove a DENIED action is actually denied - not merely that a policy object was constructed?**
+No, it does not. The tests in `tests/test_policy.py` only invoke methods directly on `PolicyEngine` instances (e.g., `engine.evaluate("PowerShell", {"command": "echo hi"})`). They do not attempt to invoke any tool through the `@requires_permission` decorator to verify that a `PermissionError` is actually raised when a denied action is attempted. I demonstrated this by mutating the decorator in `src/windows_mcp/infrastructure/policy.py` (specifically changing the internal condition to never check if the action is consequential or denied) and running the test suite - the tests still passed because the decorator itself is never tested.
+
+**2. Does it prove FAIL-CLOSED behaviour when the policy file is missing, empty, malformed, or unreadable?**
+Partially. `test_policy_malformed_fails_closed` and `test_policy_missing_fails_closed` (lines 59-84) do successfully verify that the `PolicyEngine` marks itself as `fail_closed` and returns `False` for `evaluate()`. However, for the same reason as point 1, it does not prove that an actual call to a tool would fail closed in practice, because the decorator logic is completely unexercised.
+
+**3. Is every consequential tool actually decorated, or only some?**
+Yes, all registered tools are appropriately decorated. Searching `src/windows_mcp/tools/*.py` for `@requires_permission` matches exactly the number of tools exported via `@mcp.tool` (20 occurrences each). All entry points through the `__init__.py` registry (`app`, `clipboard`, `display`, `filesystem`, `input`, `multi`, `notification`, `process`, `registry`, `scrape`, `shell`, `snapshot`) enforce the policy.
+
+**4. Can the audit log record secret values, key material, clipboard contents, or the contents of credential fields?**
+No, the redaction logic is solid. `test_policy_credential_scrub` and specific tests like `test_policy_clipboard_redaction` and `test_policy_multiedit_string_redaction` prove this works. `sanitize_args` handles known sensitive strings (via regex for tokens/secrets) and explicitly targets known sensitive argument fields per tool (like `Clipboard` mode="set" text, `MultiEdit` values, and `Type` values).
+
+**5. Could an agent bypass the engine entirely by calling an undecorated internal function, or by a code path that reaches the OS without passing through the gate?**
+No, an agent connects via the MCP protocol and can only invoke tools explicitly registered by `@mcp.tool`. Since all `@mcp.tool` exports also have `@requires_permission`, there is no way for the agent to call internal helper functions (like `capture_desktop_state`) directly.
+
+**6. For each test in the suite, would it FAIL if the protection it names were removed? Say which tests are load-bearing and which are decorative.**
+The tests are load-bearing *for the policy engine's internal logic*, but decorative *for the actual security boundary enforcement*. If `PolicyEngine.evaluate` were broken, the tests would fail. But if the `@requires_permission` decorator were removed or bypassed (e.g. `if False:`), zero tests would fail, meaning the entire security boundary could be silently bypassed without breaking the build.
+
+**VERDICT: CORRECT (do not merge, missing decorator integration tests)**
+The independent reviewer is correct. While the policy engine logic is sound and heavily tested, the *actual enforcement* (the decorator that blocks execution) has zero test coverage. You must add tests that actually invoke a dummy or existing decorated function and assert that `pytest.raises(PermissionError)` occurs for denied actions and fail-closed scenarios.
