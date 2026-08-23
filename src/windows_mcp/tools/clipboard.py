@@ -3,7 +3,7 @@
 from typing import Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 
 
@@ -20,6 +20,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Clipboard-Tool")
+    @requires_permission("Clipboard")
     def clipboard_tool(
         mode: Literal["get", "set"], text: str | None = None, ctx: Context = None,
     ) -> str:

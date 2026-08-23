@@ -8,6 +8,8 @@ import pytest
 
 from windows_mcp.tools import app
 
+pytestmark = pytest.mark.usefixtures("allow_all_policy")
+
 
 class FakeMCP:
     def __init__(self) -> None:

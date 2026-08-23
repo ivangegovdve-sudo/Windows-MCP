@@ -1,10 +1,14 @@
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+
 from windows_mcp.desktop.service import Desktop
 from windows_mcp.desktop.views import DesktopState
 from windows_mcp.tree.views import BoundingBox, Center, ScrollElementNode, TreeElementNode, TreeState
 from windows_mcp.tools.multi import register
+
+pytestmark = pytest.mark.usefixtures("allow_all_policy")
 
 
 class FakeMCP:

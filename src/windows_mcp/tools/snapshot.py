@@ -3,7 +3,7 @@
 import logging
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 
 from windows_mcp.tools._snapshot_helpers import (
@@ -33,6 +33,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "State-Tool")
+    @requires_permission("Snapshot")
     def _state_tool(
         use_vision: bool | str = False,
         use_dom: bool | str = False,
@@ -79,6 +80,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Screenshot-Tool")
+    @requires_permission("Screenshot")
     def _screenshot_tool(
         use_annotation: bool | str = False,
         width_reference_line: int | None = None,

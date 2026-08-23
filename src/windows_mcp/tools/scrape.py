@@ -1,7 +1,7 @@
 """Scrape tool — fetch/scrape web page content."""
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 
 
@@ -18,6 +18,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "Scrape-Tool")
+    @requires_permission("Scrape")
     async def scrape_tool(
         url: str,
         query: str | None = None,

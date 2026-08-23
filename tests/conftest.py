@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -80,3 +81,34 @@ def sample_desktop_state(sample_window):
         active_window=sample_window,
         windows=[sample_window],
     )
+
+@pytest.fixture
+def allow_all_policy(tmp_path, monkeypatch):
+    """Explicitly allow consequential actions in legacy functional tool tests."""
+    policy_file = tmp_path / "test_permissions.json"
+    audit_file = tmp_path / "test_audit.log"
+
+    # We allow all known tools in the test suite
+    policy_data = {
+        "allowed_tools": [
+            "App", "MultiSelect", "MultiEdit", "Move", "Shell", "PowerShell",
+            "Click", "Type", "Shortcut", "FileSystem", "Process", "Registry", "Clipboard"
+        ],
+        "allowed_modes": {
+            "App": ["launch", "launch_executable", "resize", "switch"],
+            "FileSystem": ["read", "write", "move", "copy", "delete", "list", "info", "search"],
+            "Registry": ["get", "set", "delete", "list"],
+            "Process": ["list", "kill"],
+            "Clipboard": ["get", "set"]
+        },
+        "allow_drag": True
+    }
+    policy_file.write_text(json.dumps(policy_data))
+
+    from windows_mcp.infrastructure.policy import PolicyEngine
+
+    # Inject a test engine
+    test_engine = PolicyEngine(policy_file, audit_file)
+
+    monkeypatch.setattr("windows_mcp.infrastructure.policy._engine", test_engine)
+    return test_engine

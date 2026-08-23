@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.infrastructure import with_analytics
+from windows_mcp.infrastructure import with_analytics, requires_permission
 from fastmcp import Context
 
 
@@ -86,6 +86,7 @@ def register(mcp, *, get_desktop, get_analytics):
         ),
     )
     @with_analytics(get_analytics(), "App-Tool")
+    @requires_permission("App")
     def app_tool(
         mode: Literal["launch", "launch_executable", "resize", "switch"] = "launch",
         name: str | None = None,
