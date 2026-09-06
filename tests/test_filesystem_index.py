@@ -38,6 +38,25 @@ def test_build_uses_fts_and_reports_complete_denominator(tmp_path):
     assert result["query_ms"] >= 0
 
 
+def test_safe_glob_search_aggregates_denominator_in_sqlite(tmp_path):
+    index, root = make_index(tmp_path)
+    (root / "one.md").write_text("one", encoding="utf-8")
+    (root / "two.md").write_text("two", encoding="utf-8")
+    index.build()
+    statements: list[str] = []
+    index._conn.set_trace_callback(statements.append)
+
+    result = index.search("*.md", limit=1)
+
+    index._conn.set_trace_callback(None)
+    assert result["total_matches"] == 2
+    assert result["truncated"] is True
+    assert any(
+        "COUNT(*)" in statement.upper() and "INDEX_ENTRIES" in statement.upper()
+        for statement in statements
+    )
+
+
 def test_list_and_live_metadata_are_read_only_and_bounded(tmp_path):
     index, root = make_index(tmp_path)
     folder = root / "folder"

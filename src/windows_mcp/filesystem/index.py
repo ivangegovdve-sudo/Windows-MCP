@@ -631,6 +631,18 @@ class FilesystemIndex:
             )
         return fnmatch.fnmatchcase(Path(path).name.casefold(), normalized_pattern)
 
+    @staticmethod
+    def _safe_sql_glob(pattern: str) -> tuple[str, str] | None:
+        """Return a SQLite GLOB predicate when it preserves the glob contract."""
+        normalized_pattern = pattern.replace("/", "\\").casefold()
+        # SQLite and fnmatch differ in character-class edge cases. Keep those
+        # patterns on the exact Python matcher rather than widening results.
+        if "[" in normalized_pattern or "]" in normalized_pattern:
+            return None
+        if "\\" in normalized_pattern or ":" in normalized_pattern:
+            return "lower(e.normalized_path) GLOB lower(?)", normalized_pattern
+        return "lower(e.name) GLOB lower(?)", normalized_pattern
+
     def search(
         self,
         pattern: str,
@@ -650,6 +662,7 @@ class FilesystemIndex:
             self._root_for(normalized_scope)
         started = time.perf_counter()
         fts_query = self._fts_query(pattern)
+        sql_glob = self._safe_sql_glob(pattern)
         where = ["1=1"]
         params: list[object] = []
         if fts_query:
@@ -665,6 +678,9 @@ class FilesystemIndex:
             scope_key = _key(normalized_scope)
             where.append("(e.normalized_path = ? OR e.normalized_path LIKE ? ESCAPE '\\')")
             params.extend([scope_key, scope_key + "\\%"])
+        if sql_glob:
+            where.append(sql_glob[0])
+            params.append(sql_glob[1])
         query = (
             "SELECT e.* FROM "
             + from_sql
@@ -673,17 +689,31 @@ class FilesystemIndex:
             + " ORDER BY e.normalized_path"
         )
         items: list[dict[str, object]] = []
-        total = 0
-        total_size = 0
-        with self._lock:
-            rows = self._conn.execute(query, params).fetchall()
-        for row in rows:
-            if not self._matches_pattern(row["path"], pattern):
-                continue
-            total += 1
-            total_size += int(row["size"])
-            if len(items) < limit:
-                items.append(self._public_row(row))
+        if sql_glob:
+            aggregate_query = (
+                "SELECT COUNT(*), COALESCE(SUM(e.size), 0) FROM "
+                + from_sql
+                + " WHERE "
+                + " AND ".join(where)
+            )
+            with self._lock:
+                aggregate = self._conn.execute(aggregate_query, params).fetchone()
+                rows = self._conn.execute(query + " LIMIT ?", [*params, limit]).fetchall()
+            total = int(aggregate[0])
+            total_size = int(aggregate[1])
+            items = [self._public_row(row) for row in rows]
+        else:
+            total = 0
+            total_size = 0
+            with self._lock:
+                rows = self._conn.execute(query, params).fetchall()
+            for row in rows:
+                if not self._matches_pattern(row["path"], pattern):
+                    continue
+                total += 1
+                total_size += int(row["size"])
+                if len(items) < limit:
+                    items.append(self._public_row(row))
         result = self._response_base(normalized_scope)
         result.update(
             {
