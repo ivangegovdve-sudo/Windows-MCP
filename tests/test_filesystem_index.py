@@ -145,6 +145,24 @@ def test_reconciliation_does_not_index_excluded_descendants(tmp_path):
     assert index.get_metadata(str(secret))["boundary"]["path"] == os.path.normpath(str(ssh))
 
 
+def test_new_excluded_directory_reconciles_to_boundary_row(tmp_path):
+    index, root = make_index(tmp_path)
+    index.build()
+    ssh = root / ".ssh"
+    ssh.mkdir()
+    secret = ssh / "created-after-baseline.md"
+    secret.write_text("private", encoding="utf-8")
+
+    index.record_change(str(ssh), action="created")
+    index.refresh()
+
+    info = index.get_metadata(str(secret))
+    assert info["entry"]["path"] == os.path.normpath(str(ssh))
+    assert info["boundary"]["path"] == os.path.normpath(str(ssh))
+    assert info["boundary"]["kind"] == "boundary"
+    assert index.search("created-after-baseline.md")["total_matches"] == 0
+
+
 def test_live_unindexed_path_fails_closed_even_without_notification(tmp_path):
     index, root = make_index(tmp_path)
     index.build()

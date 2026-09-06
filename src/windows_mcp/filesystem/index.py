@@ -343,7 +343,10 @@ class FilesystemIndex:
             "content_fingerprint_kind": None,
         }
 
-    def _scan_tree(self, root: str) -> Iterable[dict[str, object]]:
+    def _scan_tree(
+        self, root: str, *, coverage_root: str | None = None
+    ) -> Iterable[dict[str, object]]:
+        coverage_root = coverage_root or root
         indexed_at = _timestamp()
         if self._is_index_path(root):
             return
@@ -351,7 +354,7 @@ class FilesystemIndex:
         if _is_reparse(root_stat):
             yield self._row(
                 root,
-                root,
+                coverage_root,
                 root_stat,
                 "boundary",
                 indexed_at,
@@ -359,18 +362,18 @@ class FilesystemIndex:
                 reparse_target=_reparse_target(root),
             )
             return
-        exclusion_reason = self._exclusion_reason(root, root)
+        exclusion_reason = self._exclusion_reason(root, coverage_root)
         if exclusion_reason:
             yield self._row(
                 root,
-                root,
+                coverage_root,
                 root_stat,
                 "boundary",
                 indexed_at,
                 boundary_reason=exclusion_reason,
             )
             return
-        yield self._row(root, root, root_stat, "folder", indexed_at)
+        yield self._row(root, coverage_root, root_stat, "folder", indexed_at)
 
         stack = [root]
         seen_directories: dict[tuple[int, int], str] = {}
@@ -391,11 +394,11 @@ class FilesystemIndex:
                 except OSError as exc:
                     raise OSError(f"cannot stat {path}: {exc}") from exc
 
-                exclusion_reason = self._exclusion_reason(path, root)
+                exclusion_reason = self._exclusion_reason(path, coverage_root)
                 if exclusion_reason:
                     yield self._row(
                         path,
-                        root,
+                        coverage_root,
                         st,
                         "boundary",
                         indexed_at,
@@ -406,7 +409,7 @@ class FilesystemIndex:
                 if _is_reparse(st):
                     yield self._row(
                         path,
-                        root,
+                        coverage_root,
                         st,
                         "boundary",
                         indexed_at,
@@ -420,7 +423,7 @@ class FilesystemIndex:
                     if identity in seen_directories:
                         yield self._row(
                             path,
-                            root,
+                            coverage_root,
                             st,
                             "boundary",
                             indexed_at,
@@ -429,16 +432,16 @@ class FilesystemIndex:
                         )
                         continue
                     seen_directories[identity] = path
-                    yield self._row(path, root, st, "folder", indexed_at)
+                    yield self._row(path, coverage_root, st, "folder", indexed_at)
                     stack.append(path)
                     continue
 
                 if stat_module.S_ISREG(st.st_mode):
-                    yield self._row(path, root, st, "file", indexed_at)
+                    yield self._row(path, coverage_root, st, "file", indexed_at)
                 else:
                     yield self._row(
                         path,
-                        root,
+                        coverage_root,
                         st,
                         "boundary",
                         indexed_at,
@@ -903,7 +906,7 @@ class FilesystemIndex:
                         "DELETE FROM index_entries WHERE root=? AND (normalized_path=? OR normalized_path LIKE ? ESCAPE '\\')",
                         (root, _key(path), _key(path) + "\\%"),
                     )
-                    rows = list(self._scan_tree(path))
+                    rows = list(self._scan_tree(path, coverage_root=root))
                 else:
                     self._conn.execute(
                         "DELETE FROM index_entries WHERE root=? AND parent_path=?",
