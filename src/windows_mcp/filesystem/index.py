@@ -562,7 +562,13 @@ class FilesystemIndex:
     def _status_rows(self, scope: str | None = None) -> list[dict[str, object]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM index_roots ORDER BY root"
+                """
+                SELECT roots.*,
+                       (SELECT COUNT(*) FROM index_entries AS entries
+                        WHERE entries.root = roots.root) AS actual_row_count
+                FROM index_roots AS roots
+                ORDER BY roots.root
+                """
             ).fetchall()
         if scope is not None:
             rows = [row for row in rows if _is_under(scope, row["root"]) or _is_under(row["root"], scope)]
@@ -571,7 +577,7 @@ class FilesystemIndex:
                 "root": row["root"],
                 "state": row["state"],
                 "reason": row["reason"],
-                "row_count": int(row["row_count"]),
+                "row_count": int(row["actual_row_count"]),
                 "event_seq": int(row["event_seq"]),
                 "indexed_seq": int(row["indexed_seq"]),
                 "last_indexed_at": row["last_indexed_at"],
@@ -1032,6 +1038,9 @@ class FilesystemIndex:
                 remaining = self._conn.execute(
                     "SELECT COUNT(*) FROM pending_changes WHERE root=?", (root,)
                 ).fetchone()[0]
+                row_count = self._conn.execute(
+                    "SELECT COUNT(*) FROM index_entries WHERE root=?", (root,)
+                ).fetchone()[0]
                 root_state = self._conn.execute(
                     "SELECT event_seq, requires_full_build FROM index_roots WHERE root=?", (root,)
                 ).fetchone()
@@ -1040,10 +1049,15 @@ class FilesystemIndex:
                     self._conn.execute(
                         """
                         UPDATE index_roots
-                        SET state='fresh', reason='', indexed_seq=?, last_reconciled_at=?
+                        SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (root_state["event_seq"], now, root, root_state["event_seq"]),
+                        (row_count, root_state["event_seq"], now, root, root_state["event_seq"]),
+                    )
+                else:
+                    self._conn.execute(
+                        "UPDATE index_roots SET row_count=? WHERE root=?",
+                        (row_count, root),
                     )
                 self._conn.commit()
             counts["changes"] += 1

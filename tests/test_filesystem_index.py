@@ -161,6 +161,7 @@ def test_new_excluded_directory_reconciles_to_boundary_row(tmp_path):
     assert info["boundary"]["path"] == os.path.normpath(str(ssh))
     assert info["boundary"]["kind"] == "boundary"
     assert index.search("created-after-baseline.md")["total_matches"] == 0
+    assert index.status()["coverage"][0]["row_count"] == 2
 
 
 def test_live_unindexed_path_fails_closed_even_without_notification(tmp_path):
