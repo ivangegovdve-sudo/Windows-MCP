@@ -562,6 +562,9 @@ class FilesystemIndex:
                             root_counts["boundaries"] += 1
                             if str(row["boundary_reason"] or "").startswith("inaccessible:"):
                                 root_counts["inaccessible"] += 1
+                    indexed_row_count = sum(
+                        root_counts[key] for key in ("files", "directories", "boundaries")
+                    )
                     current = self._conn.execute(
                         "SELECT event_seq FROM index_roots WHERE root=?", (root,)
                     ).fetchone()
@@ -577,7 +580,7 @@ class FilesystemIndex:
                             WHERE root=?
                             """,
                             (
-                                sum(root_counts.values()),
+                                indexed_row_count,
                                 current_seq,
                                 last_indexed,
                                 last_indexed,
@@ -593,7 +596,7 @@ class FilesystemIndex:
                                 row_count=?, requires_full_build=0
                             WHERE root=?
                             """,
-                            (sum(root_counts.values()), root),
+                            (indexed_row_count, root),
                         )
                     self._conn.commit()
                     for key in totals:
