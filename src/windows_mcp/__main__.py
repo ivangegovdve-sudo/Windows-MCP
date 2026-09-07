@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from windows_mcp.config import enable_debug
 from windows_mcp.infrastructure import (
     AuthKeyMiddleware,
@@ -25,12 +26,15 @@ from enum import Enum
 from typing import Any, NoReturn
 import logging
 import asyncio
+import json
 import shlex
 import secrets
 import subprocess
 import click
 import os
 import sys
+
+from windows_mcp.filesystem.index import DEFAULT_INDEX_DB, FilesystemIndex
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,7 @@ desktop: Any | None = None
 watchdog: Any | None = None
 analytics: Any | None = None
 screen_size: Any | None = None
+filesystem_index: FilesystemIndex | None = None
 _mcp: FastMCP | None = None
 
 instructions = dedent("""
@@ -74,6 +79,10 @@ def _get_desktop():
 
 def _get_analytics():
     return analytics
+
+
+def _get_index():
+    return filesystem_index
 
 
 def _http_middleware(
@@ -216,12 +225,27 @@ def _build_mcp() -> FastMCP:
     @asynccontextmanager
     async def lifespan(app: FastMCP):
         """Runs initialization code before the server starts and cleanup code after it shuts down."""
-        global desktop, watchdog, analytics, screen_size
+        global desktop, watchdog, analytics, screen_size, filesystem_index
 
         if os.getenv("ANONYMIZED_TELEMETRY", "true").lower() != "false":
             analytics = PostHogAnalytics()
         desktop = Desktop()
         screen_size = desktop.get_screen_size()
+
+        index_db = os.getenv("WINDOWS_MCP_INDEX_DB")
+        if index_db:
+            raw_roots = os.getenv("WINDOWS_MCP_INDEX_ROOTS", "")
+            raw_exclusions = os.getenv("WINDOWS_MCP_INDEX_EXCLUSIONS", "")
+            roots = tuple(value.strip() for value in raw_roots.split(",") if value.strip()) or None
+            exclusions = tuple(
+                value.strip() for value in raw_exclusions.split(",") if value.strip()
+            ) or None
+            try:
+                filesystem_index = FilesystemIndex(index_db, roots, exclusions)
+                filesystem_index.start()
+            except Exception:
+                logger.exception("Filesystem index could not start; index tools remain unavailable")
+                filesystem_index = None
 
         if _watchdog_enabled():
             # Imported lazily so a disabled watchdog never loads comtypes.
@@ -242,11 +266,19 @@ def _build_mcp() -> FastMCP:
             logger.debug("Shutting down: stopping watchdog and analytics")
             if watchdog:
                 watchdog.stop()
+            if filesystem_index:
+                filesystem_index.close()
+                filesystem_index = None
             if analytics:
                 await analytics.close()
 
     _mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
-    register_all(_mcp, get_desktop=_get_desktop, get_analytics=_get_analytics)
+    register_all(
+        _mcp,
+        get_desktop=_get_desktop,
+        get_analytics=_get_analytics,
+        get_index=_get_index,
+    )
     return _mcp
 
 
@@ -415,6 +447,82 @@ def main():
     """Windows-MCP: MCP server for Windows desktop automation."""
 
 
+@main.group(name="index")
+def index_group():
+    """Operator-only lifecycle commands for the live filesystem index."""
+
+
+def _operator_index(db: str, roots: tuple[str, ...], exclusions: tuple[str, ...]) -> FilesystemIndex:
+    return FilesystemIndex(
+        db,
+        roots or None,
+        exclusions or None,
+        mark_startup_stale=False,
+    )
+
+
+@index_group.command(name="build")
+@click.option("--db", default=str(DEFAULT_INDEX_DB), show_default=True, help="SQLite database on N:.")
+@click.option("--root", "roots", multiple=True, help="Local root to index; repeat for more roots.")
+@click.option(
+    "--exclude",
+    "exclusions",
+    multiple=True,
+    help="Boundary exclusion pattern or path; repeat for more exclusions.",
+)
+def index_build(db: str, roots: tuple[str, ...], exclusions: tuple[str, ...]) -> None:
+    """Build a complete metadata baseline. Never reads file contents."""
+    index = _operator_index(db, roots, exclusions)
+    try:
+        click.echo(json.dumps(asdict(index.build()), sort_keys=True))
+    finally:
+        index.close()
+
+
+@index_group.command(name="refresh")
+@click.option("--db", default=str(DEFAULT_INDEX_DB), show_default=True, help="SQLite database on N:.")
+@click.option("--full", is_flag=True, help="Perform a full operator verification and clear stale gaps.")
+@click.option("--root", "roots", multiple=True, help="Local root configuration; repeat for more roots.")
+@click.option(
+    "--exclude",
+    "exclusions",
+    multiple=True,
+    help="Boundary exclusion pattern or path; repeat for more exclusions.",
+)
+def index_refresh(
+    db: str, full: bool, roots: tuple[str, ...], exclusions: tuple[str, ...]
+) -> None:
+    """Reconcile durable notifications, or fully verify with --full."""
+    index = _operator_index(db, roots, exclusions)
+    try:
+        click.echo(json.dumps(asdict(index.refresh(full=full)), sort_keys=True))
+    finally:
+        index.close()
+
+
+@index_group.command(name="status")
+@click.option("--db", default=str(DEFAULT_INDEX_DB), show_default=True, help="SQLite database on N:.")
+@click.option("--root", "roots", multiple=True, help="Local root configuration; repeat for more roots.")
+@click.option(
+    "--exclude",
+    "exclusions",
+    multiple=True,
+    help="Boundary exclusion pattern or path; repeat for more exclusions.",
+)
+def index_status(db: str, roots: tuple[str, ...], exclusions: tuple[str, ...]) -> None:
+    """Read index status without attaching watchers or changing freshness."""
+    index = FilesystemIndex(
+        db,
+        roots or None,
+        exclusions or None,
+        mark_startup_stale=False,
+    )
+    try:
+        click.echo(json.dumps(index.status(), sort_keys=True))
+    finally:
+        index.close()
+
+
 @main.command()
 @click.pass_context
 @click.option(
@@ -540,6 +648,24 @@ def main():
     envvar="WINDOWS_MCP_STATELESS_HTTP",
     show_default=True,
 )
+@click.option(
+    "--index-db",
+    default=None,
+    envvar="WINDOWS_MCP_INDEX_DB",
+    help="N:-resident SQLite path for the live filesystem index.",
+)
+@click.option(
+    "--index-roots",
+    default=None,
+    envvar="WINDOWS_MCP_INDEX_ROOTS",
+    help="Comma-separated local roots for the live filesystem index.",
+)
+@click.option(
+    "--index-exclusions",
+    default=None,
+    envvar="WINDOWS_MCP_INDEX_EXCLUSIONS",
+    help="Comma-separated boundary exclusions for the live filesystem index.",
+)
 def serve(
     ctx,
     transport,
@@ -558,6 +684,9 @@ def serve(
     oauth_client_id,
     oauth_client_secret,
     stateless_http,
+    index_db,
+    index_roots,
+    index_exclusions,
 ):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
@@ -582,6 +711,12 @@ def serve(
     stateless_http = bool(
         _choose_value(ctx, "stateless_http", stateless_http, cfg.server.stateless_http, False)
     )
+    if index_db:
+        os.environ["WINDOWS_MCP_INDEX_DB"] = index_db
+    if index_roots:
+        os.environ["WINDOWS_MCP_INDEX_ROOTS"] = index_roots
+    if index_exclusions:
+        os.environ["WINDOWS_MCP_INDEX_EXCLUSIONS"] = index_exclusions
     allow_insecure_remote = bool(
         _choose_value(
             ctx,
