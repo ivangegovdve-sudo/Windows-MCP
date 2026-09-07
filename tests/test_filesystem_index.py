@@ -68,6 +68,7 @@ def test_build_records_inaccessible_paths_and_continues(tmp_path, monkeypatch):
     assert index._conn.execute(
         "SELECT row_count FROM index_roots"
     ).fetchone()[0] == 3
+    assert index.refresh(full=True).inaccessible == 1
     coverage = index.status()["coverage"][0]
     assert coverage["row_count"] == 3
     assert coverage["inaccessible_count"] == 1

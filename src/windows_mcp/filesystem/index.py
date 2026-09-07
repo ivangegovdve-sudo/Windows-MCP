@@ -1084,6 +1084,7 @@ class FilesystemIndex:
                 files=stats.files,
                 directories=stats.directories,
                 boundaries=stats.boundaries,
+                inaccessible=stats.inaccessible,
                 changes=pending_count,
                 duration_ms=stats.duration_ms,
             )
