@@ -41,6 +41,7 @@ class BuildStats:
     files: int = 0
     directories: int = 0
     boundaries: int = 0
+    inaccessible: int = 0
     changes: int = 0
     duration_ms: float = 0.0
 
@@ -133,6 +134,15 @@ def _reparse_target(path: str) -> str:
         return os.readlink(path)
     except (OSError, ValueError):
         return "<reparse target unavailable>"
+
+
+def _inaccessible_stat() -> os.stat_result:
+    """Return metadata defaults for a path whose stat call was denied."""
+    return os.stat_result((0,) * 10)
+
+
+def _inaccessible_reason(exc: OSError) -> str:
+    return f"inaccessible: {type(exc).__name__}: {exc}"
 
 
 def _is_absolute_exclusion(value: str) -> bool:
@@ -324,6 +334,9 @@ class FilesystemIndex:
         reparse_target: str | None = None,
     ) -> dict[str, object]:
         path = _display_path(path)
+        size = getattr(st, "st_size", 0) or 0
+        mtime_ns = getattr(st, "st_mtime_ns", 0) or 0
+        mtime = getattr(st, "st_mtime", 0) or 0
         return {
             "root": root,
             "path": path,
@@ -332,9 +345,9 @@ class FilesystemIndex:
             "name": Path(path).name or path,
             "drive": _drive(path),
             "kind": kind,
-            "size": int(getattr(st, "st_size", 0)),
-            "mtime_ns": int(getattr(st, "st_mtime_ns", 0)),
-            "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            "size": int(size),
+            "mtime_ns": int(mtime_ns),
+            "mtime": datetime.fromtimestamp(mtime, timezone.utc).isoformat(),
             "last_indexed_at": indexed_at,
             "boundary_reason": boundary_reason,
             "reparse_target": reparse_target,
@@ -350,7 +363,18 @@ class FilesystemIndex:
         indexed_at = _timestamp()
         if self._is_index_path(root):
             return
-        root_stat = os.stat(root, follow_symlinks=False)
+        try:
+            root_stat = os.stat(root, follow_symlinks=False)
+        except OSError as exc:
+            yield self._row(
+                root,
+                coverage_root,
+                _inaccessible_stat(),
+                "boundary",
+                indexed_at,
+                boundary_reason=_inaccessible_reason(exc),
+            )
+            return
         if _is_reparse(root_stat):
             yield self._row(
                 root,
@@ -373,18 +397,25 @@ class FilesystemIndex:
                 boundary_reason=exclusion_reason,
             )
             return
-        yield self._row(root, coverage_root, root_stat, "folder", indexed_at)
-
-        stack = [root]
+        stack = [(root, root_stat)]
         seen_directories: dict[tuple[int, int], str] = {}
         root_identity = (int(root_stat.st_dev), int(root_stat.st_ino))
         seen_directories[root_identity] = root
         while stack:
-            current = stack.pop()
+            current, current_stat = stack.pop()
             try:
                 entries = sorted(os.scandir(current), key=lambda item: item.name.casefold())
             except OSError as exc:
-                raise OSError(f"cannot enumerate {current}: {exc}") from exc
+                yield self._row(
+                    current,
+                    coverage_root,
+                    current_stat,
+                    "boundary",
+                    indexed_at,
+                    boundary_reason=_inaccessible_reason(exc),
+                )
+                continue
+            yield self._row(current, coverage_root, current_stat, "folder", indexed_at)
             for entry in entries:
                 path = _display_path(entry.path)
                 if self._is_index_path(path):
@@ -392,7 +423,15 @@ class FilesystemIndex:
                 try:
                     st = os.stat(path, follow_symlinks=False)
                 except OSError as exc:
-                    raise OSError(f"cannot stat {path}: {exc}") from exc
+                    yield self._row(
+                        path,
+                        coverage_root,
+                        _inaccessible_stat(),
+                        "boundary",
+                        indexed_at,
+                        boundary_reason=_inaccessible_reason(exc),
+                    )
+                    continue
 
                 exclusion_reason = self._exclusion_reason(path, coverage_root)
                 if exclusion_reason:
@@ -432,8 +471,7 @@ class FilesystemIndex:
                         )
                         continue
                     seen_directories[identity] = path
-                    yield self._row(path, coverage_root, st, "folder", indexed_at)
-                    stack.append(path)
+                    stack.append((path, st))
                     continue
 
                 if stat_module.S_ISREG(st.st_mode):
@@ -474,7 +512,7 @@ class FilesystemIndex:
     def build(self) -> BuildStats:
         """Perform an operator-controlled full baseline build."""
         started = time.perf_counter()
-        totals = {"files": 0, "directories": 0, "boundaries": 0}
+        totals = {"files": 0, "directories": 0, "boundaries": 0, "inaccessible": 0}
         self._mark_all_stale("operator build in progress", full_gap=True)
         for root in self.roots:
             with self._lock:
@@ -485,7 +523,12 @@ class FilesystemIndex:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
                     self._conn.execute("DELETE FROM index_entries WHERE root=?", (root,))
-                    root_counts = {"files": 0, "directories": 0, "boundaries": 0}
+                    root_counts = {
+                        "files": 0,
+                        "directories": 0,
+                        "boundaries": 0,
+                        "inaccessible": 0,
+                    }
                     for row in self._scan_tree(root):
                         self._conn.execute(
                             """
@@ -517,6 +560,8 @@ class FilesystemIndex:
                             root_counts["directories"] += 1
                         else:
                             root_counts["boundaries"] += 1
+                            if str(row["boundary_reason"] or "").startswith("inaccessible:"):
+                                root_counts["inaccessible"] += 1
                     current = self._conn.execute(
                         "SELECT event_seq FROM index_roots WHERE root=?", (root,)
                     ).fetchone()
@@ -565,11 +610,32 @@ class FilesystemIndex:
                 """
                 SELECT roots.*,
                        (SELECT COUNT(*) FROM index_entries AS entries
-                        WHERE entries.root = roots.root) AS actual_row_count
+                        WHERE entries.root = roots.root) AS actual_row_count,
+                       (SELECT COUNT(*) FROM index_entries AS inaccessible
+                        WHERE inaccessible.root = roots.root
+                          AND inaccessible.boundary_reason LIKE 'inaccessible:%')
+                        AS inaccessible_count
                 FROM index_roots AS roots
                 ORDER BY roots.root
                 """
             ).fetchall()
+            reason_rows = self._conn.execute(
+                """
+                SELECT root, boundary_reason, COUNT(*) AS count
+                FROM index_entries
+                WHERE kind='boundary' AND boundary_reason LIKE 'inaccessible:%'
+                GROUP BY root, boundary_reason
+                ORDER BY root, boundary_reason
+                """
+            ).fetchall()
+        reasons_by_root: dict[str, dict[str, int]] = {}
+        for reason_row in reason_rows:
+            reason = str(reason_row["boundary_reason"] or "")
+            if reason.startswith("inaccessible: "):
+                reason = reason[len("inaccessible: "):]
+            reasons_by_root.setdefault(str(reason_row["root"]), {})[reason] = int(
+                reason_row["count"]
+            )
         if scope is not None:
             rows = [row for row in rows if _is_under(scope, row["root"]) or _is_under(row["root"], scope)]
         return [
@@ -584,6 +650,8 @@ class FilesystemIndex:
                 "last_event_at": row["last_event_at"],
                 "last_reconciled_at": row["last_reconciled_at"],
                 "requires_full_build": bool(row["requires_full_build"]),
+                "inaccessible_count": int(row["inaccessible_count"]),
+                "inaccessible_reasons": reasons_by_root.get(row["root"], {}),
             }
             for row in rows
         ]

@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+import windows_mcp.filesystem.index as index_module
 from windows_mcp.filesystem.index import FilesystemIndex
 
 
@@ -36,6 +37,39 @@ def test_build_uses_fts_and_reports_complete_denominator(tmp_path):
     assert result["exclusions"]
     assert all(item["last_indexed_at"] for item in result["items"])
     assert result["query_ms"] >= 0
+
+
+def test_build_records_inaccessible_paths_and_continues(tmp_path, monkeypatch):
+    index, root = make_index(tmp_path)
+    readable = root / "readable.txt"
+    blocked = root / "locked.txt"
+    readable.write_text("readable", encoding="utf-8")
+    blocked.write_text("blocked", encoding="utf-8")
+
+    real_stat = index_module.os.stat
+    blocked_key = os.path.normcase(os.path.abspath(str(blocked)))
+
+    def guarded_stat(path, follow_symlinks=False):
+        if os.path.normcase(os.path.abspath(os.fspath(path))) == blocked_key:
+            raise PermissionError("locked by test")
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(index_module.os, "stat", guarded_stat)
+
+    stats = index.build()
+
+    assert stats.files == 1
+    assert stats.inaccessible == 1
+    blocked_info = index.get_metadata(str(blocked))
+    assert blocked_info["entry"]["kind"] == "boundary"
+    assert blocked_info["entry"]["boundary_reason"] == (
+        "inaccessible: PermissionError: locked by test"
+    )
+    coverage = index.status()["coverage"][0]
+    assert coverage["inaccessible_count"] == 1
+    assert coverage["inaccessible_reasons"] == {
+        "PermissionError: locked by test": 1
+    }
 
 
 def test_safe_glob_search_aggregates_denominator_in_sqlite(tmp_path):
