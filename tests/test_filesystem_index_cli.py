@@ -56,9 +56,29 @@ def test_index_build_command_is_operator_facing_and_uses_requested_roots(monkeyp
 
 
 def test_index_commands_are_not_exposed_as_mcp_tools():
-    help_result = CliRunner().invoke(__main__.main, ["index", "--help"])
+    class FakeMCP:
+        def __init__(self):
+            self.tools = {}
 
-    assert help_result.exit_code == 0
-    assert "build" in help_result.output
-    assert "refresh" in help_result.output
-    assert "status" in help_result.output
+        def tool(self, name, **kwargs):
+            def decorator(func):
+                self.tools[name] = func
+                return func
+            return decorator
+
+    mcp = FakeMCP()
+
+    from windows_mcp.tools import filesystem_index
+    filesystem_index.register(mcp, get_index=lambda: None, get_analytics=lambda: None)
+
+    registered = set(mcp.tools)
+
+    assert "IndexedFileSearch" in registered
+    assert "IndexedDirectory" in registered
+    assert "IndexedPathInfo" in registered
+    assert "FilesystemIndexStatus" in registered
+
+    # Verify that CLI commands aren't exposed as MCP tools
+    assert "build" not in registered
+    assert "refresh" not in registered
+    assert "status" not in registered
