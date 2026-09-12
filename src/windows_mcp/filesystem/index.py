@@ -190,7 +190,19 @@ class FilesystemIndex:
             if key not in seen:
                 normalized.append(path)
                 seen.add(key)
-        return normalized
+
+        normalized.sort(key=lambda x: len(_key(x)))
+        filtered: list[str] = []
+        for root in normalized:
+            is_sub_root = False
+            for parent in filtered:
+                if _is_under(root, parent):
+                    is_sub_root = True
+                    break
+            if not is_sub_root:
+                filtered.append(root)
+
+        return filtered
 
     def _connect(self) -> sqlite3.Connection:
         if self.db_path != ":memory:":
@@ -694,12 +706,17 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
-        tokens = _TOKEN_RE.findall(pattern.casefold())
-        if not tokens:
+        safe_terms = []
+        casefolded_pattern = pattern.casefold()
+        for match in _TOKEN_RE.finditer(casefolded_pattern):
+            start = match.start()
+            if start == 0 or casefolded_pattern[start - 1] not in '*?[]':
+                safe_terms.append(match.group())
+        if not safe_terms:
             return None
         # Prefix terms let '*.md' use the FTS5 path index while the final
         # fnmatch below preserves the caller's actual glob semantics.
-        return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in tokens[:8])
+        return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in safe_terms[:8])
 
     @staticmethod
     def _matches_pattern(path: str, pattern: str) -> bool:
@@ -1104,8 +1121,8 @@ class FilesystemIndex:
                 raise
             with self._lock:
                 self._conn.execute(
-                    "DELETE FROM pending_changes WHERE root=? AND path=?",
-                    (root, path),
+                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq=?",
+                    (root, path, change["event_seq"]),
                 )
                 remaining = self._conn.execute(
                     "SELECT COUNT(*) FROM pending_changes WHERE root=?", (root,)
