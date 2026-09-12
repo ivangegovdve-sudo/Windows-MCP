@@ -214,7 +214,7 @@ class FilesystemIndex:
                     id INTEGER PRIMARY KEY,
                     root TEXT NOT NULL,
                     path TEXT NOT NULL,
-                    normalized_path TEXT NOT NULL UNIQUE,
+                    normalized_path TEXT NOT NULL,
                     parent_path TEXT NOT NULL,
                     name TEXT NOT NULL,
                     drive TEXT NOT NULL,
@@ -226,7 +226,8 @@ class FilesystemIndex:
                     boundary_reason TEXT,
                     reparse_target TEXT,
                     content_fingerprint TEXT,
-                    content_fingerprint_kind TEXT
+                    content_fingerprint_kind TEXT,
+                    UNIQUE(root, normalized_path)
                 );
                 CREATE INDEX IF NOT EXISTS index_entries_root_parent
                     ON index_entries(root, parent_path, kind, normalized_path);
@@ -541,8 +542,8 @@ class FilesystemIndex:
                                 :size, :mtime_ns, :mtime, :last_indexed_at, :boundary_reason,
                                 :reparse_target, :content_fingerprint, :content_fingerprint_kind
                             )
-                            ON CONFLICT(normalized_path) DO UPDATE SET
-                                root=excluded.root, path=excluded.path, parent_path=excluded.parent_path,
+                            ON CONFLICT(root, normalized_path) DO UPDATE SET
+                                path=excluded.path, parent_path=excluded.parent_path,
                                 name=excluded.name, drive=excluded.drive, kind=excluded.kind,
                                 size=excluded.size, mtime_ns=excluded.mtime_ns, mtime=excluded.mtime,
                                 last_indexed_at=excluded.last_indexed_at,
@@ -694,7 +695,12 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
-        tokens = _TOKEN_RE.findall(pattern.casefold())
+        # Only extract FTS terms that are guaranteed to match at token boundaries.
+        # A sequence of word characters in the glob is safe to use as a prefix term
+        # if it is at the start of the string or immediately preceded by a non-word
+        # character that isn't a glob wildcard.
+        safe_re = re.compile(r"(?:^|[^a-zA-Z0-9_*?\[\]])([a-zA-Z0-9_]+)")
+        tokens = safe_re.findall(pattern.casefold())
         if not tokens:
             return None
         # Prefix terms let '*.md' use the FTS5 path index while the final
@@ -1001,8 +1007,8 @@ class FilesystemIndex:
                             :size, :mtime_ns, :mtime, :last_indexed_at, :boundary_reason,
                             :reparse_target, :content_fingerprint, :content_fingerprint_kind
                         )
-                        ON CONFLICT(normalized_path) DO UPDATE SET
-                            root=excluded.root, path=excluded.path, parent_path=excluded.parent_path,
+                        ON CONFLICT(root, normalized_path) DO UPDATE SET
+                                path=excluded.path, parent_path=excluded.parent_path,
                             name=excluded.name, drive=excluded.drive, kind=excluded.kind,
                             size=excluded.size, mtime_ns=excluded.mtime_ns, mtime=excluded.mtime,
                             last_indexed_at=excluded.last_indexed_at,
@@ -1104,8 +1110,8 @@ class FilesystemIndex:
                 raise
             with self._lock:
                 self._conn.execute(
-                    "DELETE FROM pending_changes WHERE root=? AND path=?",
-                    (root, path),
+                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq<=?",
+                    (root, path, change["event_seq"]),
                 )
                 remaining = self._conn.execute(
                     "SELECT COUNT(*) FROM pending_changes WHERE root=?", (root,)
