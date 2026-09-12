@@ -183,13 +183,13 @@ class FilesystemIndex:
         if not values:
             raise ValueError("at least one local index root is required")
         normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            path = _validate_local_path(os.fspath(value))
-            key = _key(path)
-            if key not in seen:
+        sorted_paths = sorted(
+            (_validate_local_path(os.fspath(v)) for v in values),
+            key=lambda p: len(_key(p))
+        )
+        for path in sorted_paths:
+            if not any(_is_under(path, existing) for existing in normalized):
                 normalized.append(path)
-                seen.add(key)
         return normalized
 
     def _connect(self) -> sqlite3.Connection:
@@ -1124,12 +1124,12 @@ class FilesystemIndex:
                         SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (row_count, root_state["event_seq"], now, root, root_state["event_seq"]),
+                        (row_count, change["event_seq"], now, root, change["event_seq"]),
                     )
                 else:
                     self._conn.execute(
-                        "UPDATE index_roots SET row_count=? WHERE root=?",
-                        (row_count, root),
+                        "UPDATE index_roots SET row_count=?, indexed_seq=? WHERE root=?",
+                        (row_count, change["event_seq"], root),
                     )
                 self._conn.commit()
             counts["changes"] += 1
