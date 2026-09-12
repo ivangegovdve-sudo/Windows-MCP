@@ -55,10 +55,28 @@ def test_index_build_command_is_operator_facing_and_uses_requested_roots(monkeyp
     assert json.loads(result.output)["files"] == 2
 
 
-def test_index_commands_are_not_exposed_as_mcp_tools():
+def test_index_commands_are_not_exposed_as_mcp_tools(monkeypatch):
     help_result = CliRunner().invoke(__main__.main, ["index", "--help"])
 
     assert help_result.exit_code == 0
     assert "build" in help_result.output
     assert "refresh" in help_result.output
     assert "status" in help_result.output
+
+    tools = []
+
+    class FakeMCP:
+        def __init__(self, **kwargs):
+            pass
+
+        def tool(self, **kwargs):
+            def decorator(f):
+                tools.append(kwargs.get("name") or f.__name__)
+                return f
+            return decorator
+
+    monkeypatch.setattr(__main__, "FastMCP", FakeMCP)
+    __main__._build_mcp()
+
+    assert not any("build" in name.lower() for name in tools)
+    assert not any("refresh" in name.lower() for name in tools)
