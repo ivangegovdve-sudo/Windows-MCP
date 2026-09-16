@@ -183,26 +183,16 @@ class FilesystemIndex:
         if not values:
             raise ValueError("at least one local index root is required")
         normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            path = _validate_local_path(os.fspath(value))
-            key = _key(path)
-            if key not in seen:
+
+        sorted_paths = sorted(
+            (_validate_local_path(os.fspath(v)) for v in values),
+            key=lambda p: len(_key(p))
+        )
+        for path in sorted_paths:
+            if not any(_is_under(path, existing) for existing in normalized):
                 normalized.append(path)
-                seen.add(key)
 
-        normalized.sort(key=lambda x: len(_key(x)))
-        filtered: list[str] = []
-        for root in normalized:
-            is_sub_root = False
-            for parent in filtered:
-                if _is_under(root, parent):
-                    is_sub_root = True
-                    break
-            if not is_sub_root:
-                filtered.append(root)
-
-        return filtered
+        return normalized
 
     def _connect(self) -> sqlite3.Connection:
         if self.db_path != ":memory:":
