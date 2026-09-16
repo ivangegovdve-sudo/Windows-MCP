@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.4",
   "name": "Windows-MCP",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "MCP Server that enables Claude to interact with Windows OS",
   "long_description": "Windows-MCP is an open-source project that enables seamless integration between AI agents and the Windows operating system. Acting as an MCP server, it bridges the gap between large language models (LLMs) and the Windows OS, allowing agents to perform tasks such as **file navigation, application control, UI interaction, QA testing, and more**.\n\n**KEY FEATURES**\n- **Seamless Windows Integration**: Interacts natively with Windows UI elements, opens applications, controls windows, simulates user input, and more.\n- **Use Any LLM (Vision Optional)**: Does not rely on traditional computer vision techniques or fine-tuned models. Works with any LLM, reducing complexity and setup time.\n- **Rich Toolset for UI Automation**: Includes tools for keyboard and mouse control, window management, and capturing window or UI state.\n- **Lightweight & Open-Source**: Minimal dependencies with full source code available under the MIT license.\n- **Customizable & Extendable**: Easily adapt or extend tools to suit custom automation workflows or AI integrations.\n- **Real-Time Interaction**: Typical latency between actions ranges from `0.2` to `0.9` seconds, depending on system load, active applications, and LLM inference speed.\n\n**MINIMUM REQUIREMENTS**\n- **Python 3.13+**\n",
   "author": {
@@ -9,7 +9,7 @@
     "url": "https://cursortouch.com/"
   },
   "homepage": "https://cursortouch.com/",
-  "documentation": "https://github.com/CursorTouch/Windows-MCP",
+  "documentation": "https://github.com/ivangegovdve-sudo/Windows-MCP",
   "icon": "assets/logo.png",
   "screenshots": [
     "assets/screenshots/screenshot_1.png",
@@ -37,7 +37,10 @@
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "${user_config.profile_snapshot}",
         "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}",
         "WINDOWS_MCP_DEBUG": "${user_config.debug}",
-        "WINDOWS_MCP_WATCHDOG": "${user_config.watchdog}"
+        "WINDOWS_MCP_WATCHDOG": "${user_config.watchdog}",
+        "WINDOWS_MCP_INDEX_DB": "${user_config.filesystem_index_db}",
+        "WINDOWS_MCP_INDEX_ROOTS": "${user_config.filesystem_index_roots}",
+        "WINDOWS_MCP_INDEX_EXCLUSIONS": "${user_config.filesystem_index_exclusions}"
       }
     }
   },
@@ -76,6 +79,27 @@
       "description": "Run the UIAutomation focus watchdog that keeps the accessibility tree current. Disable if the watchdog degrades or crashes on unstable UIA environments after long uptime.",
       "required": false,
       "default": true
+    },
+    "filesystem_index_db": {
+      "type": "string",
+      "title": "Filesystem Index Database",
+      "description": "N:-resident SQLite database for the live metadata index. The database and its WAL files must stay on N:.",
+      "required": false,
+      "default": "N:\\WindowsMCP\\filesystem-index\\index.sqlite3"
+    },
+    "filesystem_index_roots": {
+      "type": "string",
+      "title": "Filesystem Index Roots",
+      "description": "Comma-separated local roots to index. Blank uses the current user home, D:\\, and N:\\.",
+      "required": false,
+      "default": ""
+    },
+    "filesystem_index_exclusions": {
+      "type": "string",
+      "title": "Filesystem Index Exclusions",
+      "description": "Comma-separated path/name patterns stored as boundary metadata only. Defaults include .ssh, .env*, and vault paths.",
+      "required": false,
+      "default": ""
     }
   },
   "tools": [
@@ -90,6 +114,22 @@
     {
       "name": "FileSystem",
       "description": "Manages file system operations with eight modes: 'read' (read text file contents), 'write' (create/overwrite/append to files), 'copy' (copy files or directories), 'move' (move or rename), 'delete' (delete files or directories), 'list' (list directory contents), 'search' (find files by glob pattern), 'info' (get metadata like size, dates, type). Relative paths are resolved from the user's Desktop folder. Use absolute paths to access other locations."
+    },
+    {
+      "name": "IndexedFileSearch",
+      "description": "Read-only glob search over the live metadata index. Returns files, folders, or boundary entries with freshness, index age, searched-root coverage, and exclusions; never reads contents."
+    },
+    {
+      "name": "IndexedDirectory",
+      "description": "Read-only bounded listing of immediate children from the live metadata index, including the searched-root denominator, exclusions, and freshness state."
+    },
+    {
+      "name": "IndexedPathInfo",
+      "description": "Read-only metadata for one local path with a live os.stat check. Excluded descendants resolve to their boundary row and no contents are read."
+    },
+    {
+      "name": "FilesystemIndexStatus",
+      "description": "Read-only status for SQLite WAL/FTS5, per-root coverage, pending changes, exclusions, index age, and the reserved content identity slot."
     },
     {
       "name": "Screenshot",
@@ -170,6 +210,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/CursorTouch/Windows-MCP"
+    "url": "https://github.com/ivangegovdve-sudo/Windows-MCP"
   }
 }

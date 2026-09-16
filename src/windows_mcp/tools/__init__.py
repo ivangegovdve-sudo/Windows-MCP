@@ -5,6 +5,7 @@ from windows_mcp.tools import (
     clipboard,
     display,
     filesystem,
+    filesystem_index,
     input,
     multi,
     notification,
@@ -31,7 +32,7 @@ _MODULES = [
 ]
 
 
-def register_all(mcp, *, get_desktop, get_analytics):
+def register_all(mcp, *, get_desktop, get_analytics, get_index=None):
     """Register every tool module on *mcp*.
 
     *get_desktop* and *get_analytics* are zero-arg callables that return the
@@ -40,3 +41,4 @@ def register_all(mcp, *, get_desktop, get_analytics):
     """
     for mod in _MODULES:
         mod.register(mcp, get_desktop=get_desktop, get_analytics=get_analytics)
+    filesystem_index.register(mcp, get_index=get_index, get_analytics=get_analytics)

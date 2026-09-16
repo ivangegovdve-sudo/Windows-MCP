@@ -101,6 +101,46 @@ This creates a per-user Scheduled Task named `windows-mcp-server` and a wrapper 
 `~/.windows-mcp/start-server.cmd`. Use `windows-mcp uninstall` to remove it. Logs are written
 to `~/.windows-mcp/server.log` and `~/.windows-mcp/server.error.log`.
 
+### Live indexed filesystem discovery
+
+Windows-MCP includes a read-only metadata index for deterministic file and folder discovery.
+The SQLite database, WAL, and FTS5 path index must live on `N:`; the default is
+`N:\WindowsMCP\filesystem-index\index.sqlite3`. The default roots are the current user's home,
+`D:\`, and `N:\`. Only names, paths, types, sizes, and modification times are indexed; file
+contents are never read.
+
+Build the baseline as an operator command, outside MCP tool calls:
+
+```powershell
+windows-mcp index build `
+  --db 'N:\WindowsMCP\filesystem-index\index.sqlite3' `
+  --root 'C:\Users\ivang' --root 'D:\' --root 'N:\'
+```
+
+The running server attaches Windows directory-change notifications and performs bounded
+reconciliation. A notification overflow, queue loss, or startup gap is persisted as
+`possibly_stale`; queries never hide it. Use `index status` to inspect coverage and `index refresh`
+for pending notifications. Use `index refresh --full` after a startup gap or any operator action
+that needs a complete re-verification. The four read-only tools are `IndexedFileSearch`,
+`IndexedDirectory`, `IndexedPathInfo`, and `FilesystemIndexStatus`. Every response names the
+searched roots and exclusions, reports per-root coverage and index age, and carries `fresh` or
+`possibly_stale` state. `.ssh`, `.env*`, vault paths, reparse points, and the index's own directory
+are boundaries: their metadata may be visible, but descendants and contents are not indexed.
+
+To enable the live service explicitly, pass the same configuration to `serve`:
+
+```powershell
+windows-mcp serve `
+  --index-db 'N:\WindowsMCP\filesystem-index\index.sqlite3' `
+  --index-roots 'C:\Users\ivang,D:\,N:\'
+```
+
+The Claude Desktop Extension manifest exposes these as `filesystem_index_db`,
+`filesystem_index_roots`, and `filesystem_index_exclusions`. Installing the extension from this
+fork rebuilds its `uv` environment; after the baseline is built, reload/restart the extension so
+Claude starts this entry point. The existing installed extension directory is not modified by the
+repository or by these commands.
+
 <details>
   <summary>Install in Claude Desktop</summary>
 
@@ -647,6 +687,9 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 | `WINDOWS_MCP_OAUTH_CLIENT_ID` | _(none)_ | OAuth client ID for HTTP transports. Must be provided with `WINDOWS_MCP_OAUTH_CLIENT_SECRET`. |
 | `WINDOWS_MCP_OAUTH_CLIENT_SECRET` | _(none)_ | OAuth client secret for HTTP transports. Must be provided with `WINDOWS_MCP_OAUTH_CLIENT_ID`. |
 | `WINDOWS_MCP_STATELESS_HTTP` | `false` | Set to `1`, `true`, `yes`, or `on` to run `streamable-http` without `Mcp-Session-Id` connection state. Useful for reconnects after restarts and for horizontally scaled deployments. |
+| `WINDOWS_MCP_INDEX_DB` | _(none)_ | N:-resident SQLite database path for the live metadata index. The index refuses C: and other drives. |
+| `WINDOWS_MCP_INDEX_ROOTS` | current user home, `D:\`, `N:\` | Comma-separated local roots watched and searched by the live index. UNC and mapped network roots are rejected. |
+| `WINDOWS_MCP_INDEX_EXCLUSIONS` | `.ssh,.env*,vault,.vault,vaults` | Comma-separated path/name boundaries stored as metadata only. The index database directory is always excluded. |
 
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cursortouch-windows-mcp-badge.png)](https://mseep.ai/app/cursortouch-windows-mcp)
 
@@ -725,6 +768,10 @@ MCP Client can access the following tools to interact with Windows:
 - `App`: Launch an application by Start Menu name or strictly by executable path with separated argv and optional cwd; resize, move, and switch between windows.
 - `PowerShell`: To execute PowerShell commands.
 - `FileSystem`: Read, write, copy, move, delete, list, search, and inspect files and directories.
+- `IndexedFileSearch`: Read-only glob search over live indexed metadata with explicit roots, exclusions, and freshness.
+- `IndexedDirectory`: Read-only bounded immediate-child listing from the live metadata index.
+- `IndexedPathInfo`: Read-only indexed metadata plus a live `os.stat` check for one local path.
+- `FilesystemIndexStatus`: Read-only SQLite/FTS5, coverage, pending-change, age, and freshness status.
 - `Scrape`: To scrape the entire webpage for information.
 - `MultiSelect`: Select multiple items (files, folders, checkboxes) with optional Ctrl key. Uses bulk label-to-coordinate resolution when labels are provided.
 - `MultiEdit`: Enter text into multiple input fields at specified coordinates. Uses bulk label-to-coordinate resolution when labels are provided.
