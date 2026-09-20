@@ -694,7 +694,16 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
-        tokens = _TOKEN_RE.findall(pattern.casefold())
+        clean_pattern = re.sub(r'\[.*?\]', '?', pattern.casefold())
+        parts = re.split(r'[^a-z0-9*?]+', clean_pattern)
+        tokens = []
+        for part in parts:
+            if not part:
+                continue
+            match = re.match(r'^([a-z0-9]+)', part)
+            if match:
+                tokens.append(match.group(1))
+
         if not tokens:
             return None
         # Prefix terms let '*.md' use the FTS5 path index while the final
@@ -1104,8 +1113,8 @@ class FilesystemIndex:
                 raise
             with self._lock:
                 self._conn.execute(
-                    "DELETE FROM pending_changes WHERE root=? AND path=?",
-                    (root, path),
+                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq=?",
+                    (root, path, change["event_seq"]),
                 )
                 remaining = self._conn.execute(
                     "SELECT COUNT(*) FROM pending_changes WHERE root=?", (root,)
