@@ -183,13 +183,13 @@ class FilesystemIndex:
         if not values:
             raise ValueError("at least one local index root is required")
         normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            path = _validate_local_path(os.fspath(value))
-            key = _key(path)
-            if key not in seen:
+        sorted_paths = sorted(
+            (_validate_local_path(os.fspath(v)) for v in values),
+            key=lambda p: len(_key(p))
+        )
+        for path in sorted_paths:
+            if not any(_is_under(path, existing) for existing in normalized):
                 normalized.append(path)
-                seen.add(key)
         return normalized
 
     def _connect(self) -> sqlite3.Connection:
@@ -214,7 +214,7 @@ class FilesystemIndex:
                     id INTEGER PRIMARY KEY,
                     root TEXT NOT NULL,
                     path TEXT NOT NULL,
-                    normalized_path TEXT NOT NULL,
+                    normalized_path TEXT NOT NULL UNIQUE,
                     parent_path TEXT NOT NULL,
                     name TEXT NOT NULL,
                     drive TEXT NOT NULL,
@@ -226,8 +226,7 @@ class FilesystemIndex:
                     boundary_reason TEXT,
                     reparse_target TEXT,
                     content_fingerprint TEXT,
-                    content_fingerprint_kind TEXT,
-                    UNIQUE(root, normalized_path)
+                    content_fingerprint_kind TEXT
                 );
                 CREATE INDEX IF NOT EXISTS index_entries_root_parent
                     ON index_entries(root, parent_path, kind, normalized_path);
@@ -542,8 +541,8 @@ class FilesystemIndex:
                                 :size, :mtime_ns, :mtime, :last_indexed_at, :boundary_reason,
                                 :reparse_target, :content_fingerprint, :content_fingerprint_kind
                             )
-                            ON CONFLICT(root, normalized_path) DO UPDATE SET
-                                path=excluded.path, parent_path=excluded.parent_path,
+                            ON CONFLICT(normalized_path) DO UPDATE SET
+                                root=excluded.root, path=excluded.path, parent_path=excluded.parent_path,
                                 name=excluded.name, drive=excluded.drive, kind=excluded.kind,
                                 size=excluded.size, mtime_ns=excluded.mtime_ns, mtime=excluded.mtime,
                                 last_indexed_at=excluded.last_indexed_at,
@@ -695,12 +694,16 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
-        # Only extract FTS terms that are guaranteed to match at token boundaries.
-        # A sequence of word characters in the glob is safe to use as a prefix term
-        # if it is at the start of the string or immediately preceded by a non-word
-        # character that isn't a glob wildcard.
-        safe_re = re.compile(r"(?:^|[^a-zA-Z0-9_*?\[\]])([a-zA-Z0-9_]+)")
-        tokens = safe_re.findall(pattern.casefold())
+        clean_pattern = re.sub(r'\[.*?\]', '?', pattern.casefold())
+        parts = re.split(r'[^a-z0-9*?]+', clean_pattern)
+        tokens = []
+        for part in parts:
+            if not part:
+                continue
+            match = re.match(r'^([a-z0-9]+)', part)
+            if match:
+                tokens.append(match.group(1))
+
         if not tokens:
             return None
         # Prefix terms let '*.md' use the FTS5 path index while the final
@@ -1007,8 +1010,8 @@ class FilesystemIndex:
                             :size, :mtime_ns, :mtime, :last_indexed_at, :boundary_reason,
                             :reparse_target, :content_fingerprint, :content_fingerprint_kind
                         )
-                        ON CONFLICT(root, normalized_path) DO UPDATE SET
-                                path=excluded.path, parent_path=excluded.parent_path,
+                        ON CONFLICT(normalized_path) DO UPDATE SET
+                            root=excluded.root, path=excluded.path, parent_path=excluded.parent_path,
                             name=excluded.name, drive=excluded.drive, kind=excluded.kind,
                             size=excluded.size, mtime_ns=excluded.mtime_ns, mtime=excluded.mtime,
                             last_indexed_at=excluded.last_indexed_at,
@@ -1110,7 +1113,7 @@ class FilesystemIndex:
                 raise
             with self._lock:
                 self._conn.execute(
-                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq<=?",
+                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq=?",
                     (root, path, change["event_seq"]),
                 )
                 remaining = self._conn.execute(
@@ -1130,12 +1133,12 @@ class FilesystemIndex:
                         SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (row_count, root_state["event_seq"], now, root, root_state["event_seq"]),
+                        (row_count, change["event_seq"], now, root, change["event_seq"]),
                     )
                 else:
                     self._conn.execute(
-                        "UPDATE index_roots SET row_count=? WHERE root=?",
-                        (row_count, root),
+                        "UPDATE index_roots SET row_count=?, indexed_seq=? WHERE root=?",
+                        (row_count, change["event_seq"], root),
                     )
                 self._conn.commit()
             counts["changes"] += 1

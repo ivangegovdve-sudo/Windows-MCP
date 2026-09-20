@@ -55,7 +55,7 @@ def test_index_build_command_is_operator_facing_and_uses_requested_roots(monkeyp
     assert json.loads(result.output)["files"] == 2
 
 
-def test_index_commands_are_not_exposed_as_mcp_tools(monkeypatch):
+def test_index_commands_are_not_exposed_as_mcp_tools():
     help_result = CliRunner().invoke(__main__.main, ["index", "--help"])
 
     assert help_result.exit_code == 0
@@ -63,20 +63,36 @@ def test_index_commands_are_not_exposed_as_mcp_tools(monkeypatch):
     assert "refresh" in help_result.output
     assert "status" in help_result.output
 
-    tools = []
+    # Additionally verify that no index lifecycle tools are exposed in the MCP registry
+    from fastmcp import FastMCP
+    from windows_mcp.tools import register_all
 
-    class FakeMCP:
-        def __init__(self, **kwargs):
-            pass
+    mcp = FastMCP("test-server")
 
-        def tool(self, **kwargs):
-            def decorator(f):
-                tools.append(kwargs.get("name") or f.__name__)
-                return f
-            return decorator
+    # Provide mock dependencies to satisfy the permission/analytics handlers during registration
+    class DummyAnalytics:
+        pass
 
-    monkeypatch.setattr(__main__, "FastMCP", FakeMCP)
-    __main__._build_mcp()
+    class DummyPolicyEngine:
+        def get_restrictions(self, tool_name):
+            return None
 
-    assert not any("build" in name.lower() for name in tools)
-    assert not any("refresh" in name.lower() for name in tools)
+    class DummyState:
+        def __init__(self):
+            self.policy_engine = DummyPolicyEngine()
+            self.analytics = DummyAnalytics()
+
+    state = DummyState()
+
+    register_all(
+        mcp,
+        get_desktop=lambda: None,
+        get_index=lambda: None,
+        get_analytics=lambda: state.analytics,
+    )
+
+    # We shouldn't see 'build', 'refresh', or any similar administrative commands
+    # exposed as MCP tools. The index tools should be read-only (like search, info).
+    tool_names = [tool.name.casefold() for tool in mcp._tool_manager.get_tools()]
+    assert not any("build" in name for name in tool_names)
+    assert not any("refresh" in name for name in tool_names)
