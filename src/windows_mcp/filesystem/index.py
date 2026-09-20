@@ -1133,7 +1133,7 @@ class FilesystemIndex:
                         SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (row_count, change["event_seq"], now, root, root_state["event_seq"]),
+                        (row_count, change["event_seq"], now, root, change["event_seq"]),
                     )
                 else:
                     self._conn.execute(
