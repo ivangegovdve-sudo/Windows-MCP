@@ -86,8 +86,7 @@ def test_index_commands_are_not_exposed_as_mcp_tools():
 
     register_all(
         mcp,
-        get_config=lambda: None,
-        get_state=lambda: state,
+        get_desktop=lambda: None,
         get_index=lambda: None,
         get_analytics=lambda: state.analytics,
     )
