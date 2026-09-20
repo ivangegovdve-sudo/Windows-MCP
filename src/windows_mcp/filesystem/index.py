@@ -185,7 +185,7 @@ class FilesystemIndex:
         normalized: list[str] = []
         sorted_paths = sorted(
             (_validate_local_path(os.fspath(v)) for v in values),
-            key=lambda p: len(_key(p))
+            key=lambda p: len(Path(p).parts)
         )
         for path in sorted_paths:
             if not any(_is_under(path, existing) for existing in normalized):
@@ -1133,7 +1133,7 @@ class FilesystemIndex:
                         SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (row_count, change["event_seq"], now, root, change["event_seq"]),
+                        (row_count, change["event_seq"], now, root, root_state["event_seq"]),
                     )
                 else:
                     self._conn.execute(
