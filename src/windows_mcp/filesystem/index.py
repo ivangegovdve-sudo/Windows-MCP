@@ -183,15 +183,13 @@ class FilesystemIndex:
         if not values:
             raise ValueError("at least one local index root is required")
         normalized: list[str] = []
-
         sorted_paths = sorted(
             (_validate_local_path(os.fspath(v)) for v in values),
-            key=lambda p: len(Path(p).parts)
+            key=lambda p: len(_key(p))
         )
         for path in sorted_paths:
             if not any(_is_under(path, existing) for existing in normalized):
                 normalized.append(path)
-
         return normalized
 
     def _connect(self) -> sqlite3.Connection:
@@ -696,17 +694,21 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
-        safe_terms = []
-        casefolded_pattern = pattern.casefold()
-        for match in _TOKEN_RE.finditer(casefolded_pattern):
-            start = match.start()
-            if start == 0 or casefolded_pattern[start - 1] not in '*?[]':
-                safe_terms.append(match.group())
-        if not safe_terms:
+        clean_pattern = re.sub(r'\[.*?\]', '?', pattern.casefold())
+        parts = re.split(r'[^a-z0-9*?]+', clean_pattern)
+        tokens = []
+        for part in parts:
+            if not part:
+                continue
+            match = re.match(r'^([a-z0-9]+)', part)
+            if match:
+                tokens.append(match.group(1))
+
+        if not tokens:
             return None
         # Prefix terms let '*.md' use the FTS5 path index while the final
         # fnmatch below preserves the caller's actual glob semantics.
-        return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in safe_terms[:8])
+        return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in tokens[:8])
 
     @staticmethod
     def _matches_pattern(path: str, pattern: str) -> bool:
@@ -1131,12 +1133,12 @@ class FilesystemIndex:
                         SET state='fresh', reason='', row_count=?, indexed_seq=?, last_reconciled_at=?
                         WHERE root=? AND event_seq=?
                         """,
-                        (row_count, root_state["event_seq"], now, root, root_state["event_seq"]),
+                        (row_count, change["event_seq"], now, root, change["event_seq"]),
                     )
                 else:
                     self._conn.execute(
-                        "UPDATE index_roots SET row_count=? WHERE root=?",
-                        (row_count, root),
+                        "UPDATE index_roots SET row_count=?, indexed_seq=? WHERE root=?",
+                        (row_count, change["event_seq"], root),
                     )
                 self._conn.commit()
             counts["changes"] += 1
