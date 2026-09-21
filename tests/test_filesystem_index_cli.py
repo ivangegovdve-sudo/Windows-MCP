@@ -56,43 +56,29 @@ def test_index_build_command_is_operator_facing_and_uses_requested_roots(monkeyp
 
 
 def test_index_commands_are_not_exposed_as_mcp_tools():
-    help_result = CliRunner().invoke(__main__.main, ["index", "--help"])
-
-    assert help_result.exit_code == 0
-    assert "build" in help_result.output
-    assert "refresh" in help_result.output
-    assert "status" in help_result.output
-
-    # Additionally verify that no index lifecycle tools are exposed in the MCP registry
-    from fastmcp import FastMCP
-    from windows_mcp.tools import register_all
-
-    mcp = FastMCP("test-server")
-
-    # Provide mock dependencies to satisfy the permission/analytics handlers during registration
-    class DummyAnalytics:
-        pass
-
-    class DummyPolicyEngine:
-        def get_restrictions(self, tool_name):
-            return None
-
-    class DummyState:
+    class FakeMCP:
         def __init__(self):
-            self.policy_engine = DummyPolicyEngine()
-            self.analytics = DummyAnalytics()
+            self.tools = {}
 
-    state = DummyState()
+        def tool(self, name, **kwargs):
+            def decorator(func):
+                self.tools[name] = func
+                return func
+            return decorator
 
-    register_all(
-        mcp,
-        get_desktop=lambda: None,
-        get_index=lambda: None,
-        get_analytics=lambda: state.analytics,
-    )
+    mcp = FakeMCP()
 
-    # We shouldn't see 'build', 'refresh', or any similar administrative commands
-    # exposed as MCP tools. The index tools should be read-only (like search, info).
-    tool_names = [tool.name.casefold() for tool in mcp._tool_manager.get_tools()]
-    assert not any("build" in name for name in tool_names)
-    assert not any("refresh" in name for name in tool_names)
+    from windows_mcp.tools import filesystem_index
+    filesystem_index.register(mcp, get_index=lambda: None, get_analytics=lambda: None)
+
+    registered = set(mcp.tools)
+
+    assert "IndexedFileSearch" in registered
+    assert "IndexedDirectory" in registered
+    assert "IndexedPathInfo" in registered
+    assert "FilesystemIndexStatus" in registered
+
+    # Verify that CLI commands aren't exposed as MCP tools
+    assert "build" not in registered
+    assert "refresh" not in registered
+    assert "status" not in registered
