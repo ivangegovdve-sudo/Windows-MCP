@@ -39,6 +39,21 @@ def test_build_uses_fts_and_reports_complete_denominator(tmp_path):
     assert result["query_ms"] >= 0
 
 
+def test_glob_prefilter_keeps_matches_after_wildcard_boundaries(tmp_path):
+    index, root = make_index(tmp_path)
+    (root / "foobar.md").write_text("joined", encoding="utf-8")
+    (root / "foo-section-bar.md").write_text("separated", encoding="utf-8")
+
+    index.build()
+
+    result = index.search("foo*bar.md")
+
+    assert {item["name"] for item in result["items"]} == {
+        "foobar.md",
+        "foo-section-bar.md",
+    }
+
+
 def test_build_records_inaccessible_paths_and_continues(tmp_path, monkeypatch):
     index, root = make_index(tmp_path)
     readable = root / "readable.txt"
@@ -137,6 +152,30 @@ def test_service_start_fails_toward_stale_and_refresh_clears_known_change(tmp_pa
     assert refresh.changes >= 1
     assert after_refresh["freshness"] == "fresh"
     assert after_refresh["items"][0]["mtime_ns"] == file_path.stat().st_mtime_ns
+
+
+def test_refresh_retains_newer_notification_for_same_path(tmp_path):
+    index, root = make_index(tmp_path)
+    file_path = root / "mutable.txt"
+    file_path.write_text("before", encoding="utf-8")
+    index.build()
+    index.record_change(str(file_path), action="modified")
+
+    original_reconcile = index._reconcile_one
+
+    def reconcile_then_record_newer(root_path, path, action):
+        original_reconcile(root_path, path, action)
+        index.record_change(path, action="modified")
+
+    index._reconcile_one = reconcile_then_record_newer
+    index.refresh()
+
+    pending = index._conn.execute(
+        "SELECT event_seq FROM pending_changes WHERE path=?", (str(file_path),)
+    ).fetchall()
+
+    assert len(pending) == 1
+    assert index.status()["pending_changes"] == 1
 
 
 def test_excluded_boundaries_are_indexed_without_descendants(tmp_path):
