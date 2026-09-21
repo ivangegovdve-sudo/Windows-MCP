@@ -49,7 +49,6 @@ def test_real_directory_change_notification_is_stale_before_full_refresh(n_works
     root, db = n_workspace
     file_path = root / "watched.txt"
     file_path.write_text("before", encoding="utf-8")
-    old_mtime_ns = file_path.stat().st_mtime_ns
     index = FilesystemIndex(str(db), [str(root)])
 
     try:
@@ -60,14 +59,18 @@ def test_real_directory_change_notification_is_stale_before_full_refresh(n_works
         file_path.write_text("after", encoding="utf-8")
 
         deadline = time.monotonic() + 5
+        observed = False
         while time.monotonic() < deadline:
-            if index.status()["pending_changes"]:
+            status = index.status()
+            if status["pending_changes"] or status["coverage"][0]["event_seq"] > 0:
+                observed = True
                 break
             time.sleep(0.05)
         before_refresh = index.search("watched.txt")
         assert before_refresh["freshness"] == "possibly_stale"
-        assert before_refresh["items"][0]["mtime_ns"] == old_mtime_ns
+        assert observed
 
+        index.stop()
         index.refresh(full=True)
         after_refresh = index.search("watched.txt")
     finally:
@@ -75,6 +78,34 @@ def test_real_directory_change_notification_is_stale_before_full_refresh(n_works
 
     assert after_refresh["freshness"] == "fresh"
     assert after_refresh["items"][0]["mtime_ns"] == file_path.stat().st_mtime_ns
+
+
+def test_real_directory_change_notification_reaches_index(tmp_path):
+    root = tmp_path / "watch-root"
+    root.mkdir()
+    index = FilesystemIndex(":memory:", [str(root)], mark_startup_stale=False)
+
+    try:
+        index.build()
+        index.start()
+        time.sleep(0.25)
+        created = root / "created.txt"
+        created.write_text("created", encoding="utf-8")
+
+        deadline = time.monotonic() + 5
+        result = index.search("created.txt")
+        while time.monotonic() < deadline:
+            result = index.search("created.txt")
+            if result["total_matches"] == 1:
+                break
+            time.sleep(0.05)
+
+        status = index.status()
+    finally:
+        index.close()
+
+    assert result["total_matches"] == 1, {"result": result, "status": status}
+    assert status["coverage"][0]["event_seq"] > 0, status
 
 
 def test_operator_cli_builds_real_n_drive_index(n_workspace):

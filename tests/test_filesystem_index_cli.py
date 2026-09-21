@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from click.testing import CliRunner
@@ -93,6 +94,6 @@ def test_index_commands_are_not_exposed_as_mcp_tools():
 
     # We shouldn't see 'build', 'refresh', or any similar administrative commands
     # exposed as MCP tools. The index tools should be read-only (like search, info).
-    tool_names = [tool.name.casefold() for tool in mcp._tool_manager.get_tools()]
+    tool_names = [tool.name.casefold() for tool in asyncio.run(mcp.list_tools())]
     assert not any("build" in name for name in tool_names)
     assert not any("refresh" in name for name in tool_names)

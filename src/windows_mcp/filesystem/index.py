@@ -1207,9 +1207,13 @@ class _DirectoryChangeWatcher(threading.Thread):
         self._stop_event.set()
         if self._handle is not None:
             try:
-                import win32file
+                import ctypes
+                from ctypes import wintypes
 
-                win32file.CloseHandle(self._handle)
+                cancel_io_ex = ctypes.WinDLL("kernel32", use_last_error=True).CancelIoEx
+                cancel_io_ex.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+                cancel_io_ex.restype = wintypes.BOOL
+                cancel_io_ex(wintypes.HANDLE(int(self._handle)), None)
             except Exception:
                 pass
 
@@ -1220,7 +1224,7 @@ class _DirectoryChangeWatcher(threading.Thread):
 
             self._handle = win32file.CreateFile(
                 self.root,
-                win32con.FILE_LIST_DIRECTORY,
+                win32con.GENERIC_READ,
                 win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
                 None,
                 win32con.OPEN_EXISTING,
@@ -1235,8 +1239,7 @@ class _DirectoryChangeWatcher(threading.Thread):
                     win32con.FILE_NOTIFY_CHANGE_FILE_NAME
                     | win32con.FILE_NOTIFY_CHANGE_DIR_NAME
                     | win32con.FILE_NOTIFY_CHANGE_SIZE
-                    | win32con.FILE_NOTIFY_CHANGE_LAST_WRITE
-                    | win32con.FILE_NOTIFY_CHANGE_CREATION,
+                    | win32con.FILE_NOTIFY_CHANGE_LAST_WRITE,
                 )
                 if not changes:
                     self.index.mark_root_possibly_stale(
