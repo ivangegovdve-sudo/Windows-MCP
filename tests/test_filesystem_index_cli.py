@@ -56,9 +56,12 @@ def test_index_build_command_is_operator_facing_and_uses_requested_roots(monkeyp
 
 
 def test_index_commands_are_not_exposed_as_mcp_tools():
-    help_result = CliRunner().invoke(__main__.main, ["index", "--help"])
+    from windows_mcp.__main__ import _build_mcp
 
-    assert help_result.exit_code == 0
-    assert "build" in help_result.output
-    assert "refresh" in help_result.output
-    assert "status" in help_result.output
+    mcp = _build_mcp()
+    tool_names = [tool.name for tool in mcp._mcp.server.tools]
+
+    assert "build" not in tool_names
+    assert "refresh" not in tool_names
+    assert "status" not in tool_names
+    assert "FilesystemIndexStatus" in tool_names

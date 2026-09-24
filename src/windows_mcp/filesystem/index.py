@@ -190,6 +190,11 @@ class FilesystemIndex:
             if key not in seen:
                 normalized.append(path)
                 seen.add(key)
+        normalized.sort(key=len)
+        for i in range(len(normalized)):
+            for j in range(i + 1, len(normalized)):
+                if _is_under(normalized[j], normalized[i], equal=False):
+                    raise ValueError(f"overlapping roots are not supported: {normalized[j]} is under {normalized[i]}")
         return normalized
 
     def _connect(self) -> sqlite3.Connection:
@@ -694,6 +699,8 @@ class FilesystemIndex:
         return result
 
     def _fts_query(self, pattern: str) -> str | None:
+        if re.search(r"[*?\]][A-Za-z0-9_]", pattern):
+            return None
         tokens = _TOKEN_RE.findall(pattern.casefold())
         if not tokens:
             return None
@@ -1096,7 +1103,12 @@ class FilesystemIndex:
             ).fetchall()
         counts = {"files": 0, "directories": 0, "boundaries": 0, "changes": 0}
         for change in pending:
-            root, path, action = change["root"], change["path"], change["action"]
+            root, path, action, event_seq = (
+                change["root"],
+                change["path"],
+                change["action"],
+                change["event_seq"],
+            )
             try:
                 self._reconcile_one(root, path, action)
             except Exception as exc:
@@ -1104,8 +1116,8 @@ class FilesystemIndex:
                 raise
             with self._lock:
                 self._conn.execute(
-                    "DELETE FROM pending_changes WHERE root=? AND path=?",
-                    (root, path),
+                    "DELETE FROM pending_changes WHERE root=? AND path=? AND event_seq<=?",
+                    (root, path, event_seq),
                 )
                 remaining = self._conn.execute(
                     "SELECT COUNT(*) FROM pending_changes WHERE root=?", (root,)
